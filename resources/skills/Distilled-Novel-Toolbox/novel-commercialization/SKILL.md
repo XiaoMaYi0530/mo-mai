@@ -1,6 +1,6 @@
 ---
-name: novel-commercialization
-description: 网文商业化与平台特化。当用户需要选择发布平台、了解平台风格、设计变现模式、规划签约策略时触发。覆盖起点/番茄/飞卢/晋江/七猫/新媒体文等平台详细对比，以及付费vs免费、IP改编等商业化设计。
+name: 平台与商业化
+description: 分析发布平台、读者偏好、签约与变现路径；只在立项或市场判断时使用，不参与日常正文生成。
 license: MIT
 compatibility: opencode
 metadata:
@@ -11,6 +11,8 @@ manifest:
   compatibility: native
   enabled: true
   priority: 4
+  genres:
+    - general
   stages:
     - reference
     - premise

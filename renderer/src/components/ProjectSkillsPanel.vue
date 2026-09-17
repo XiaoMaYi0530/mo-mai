@@ -1,11 +1,21 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { BookOpenText, ChevronDown, Trash2 } from 'lucide-vue-next'
+import { BookOpenText, ChevronDown, RotateCcw, Trash2 } from 'lucide-vue-next'
 import { NButton, NCheckbox, NSelect, NTag, useDialog, useMessage } from 'naive-ui'
 import { normalizeSkillUsePolicy, type SkillUseMode } from '@shared/assistant-runtime'
+import {
+  orderSkillsByPresetBinding,
+  resetSkillPresetBinding,
+  resolveSkillPreset,
+  SKILL_PRESETS,
+  updateSkillPresetBinding,
+  type SkillPresetBindings,
+  type SkillPresetId
+} from '@shared/skill-presets'
 import { novelWorkflowStageDefinitions } from '@/features/novelWorkflow/stages'
 import { useAppStore } from '@/stores/app'
 import type { NovelWorkflowStageId, ProjectSkillItem } from '@/types/app'
+import { formatSkillGenreLabels } from '@shared/skill-genres'
 
 const props = withDefaults(defineProps<{
   scope?: 'global' | 'project'
@@ -20,6 +30,7 @@ const dialog = useDialog()
 const isScanningProjectSkills = ref(false)
 const isImportingProjectSkills = ref(false)
 const projectSkillItems = ref<ProjectSkillItem[]>([])
+const activePresetId = ref<SkillPresetId>('draft')
 
 const currentProject = computed(() => appStore.currentProject)
 const isProjectScope = computed(() => props.scope === 'project')
@@ -57,9 +68,32 @@ const importedProjectSkillCount = computed(() =>
   resolvedProjectSkills.value.filter((skill) => skill.scope !== 'builtin').length
 )
 const projectSkillPolicy = computed(() => normalizeSkillUsePolicy(currentProject.value?.skillPolicy))
-const selectableDefaultSkills = computed(() =>
-  resolvedProjectSkills.value.filter((skill) => skill.enabled && skill.compatibility !== 'external-only')
+const projectSkillPresetBindings = computed(() => currentProject.value?.skillPresetBindings ?? {})
+const presetCandidateSkills = computed(() =>
+  resolvedProjectSkills.value.filter((skill) => skill.compatibility !== 'external-only')
 )
+const selectableDefaultSkills = computed(() => presetCandidateSkills.value.filter((skill) => skill.enabled))
+const orderedDefaultSkills = computed(() => orderSkillsByPresetBinding(
+  selectableDefaultSkills.value,
+  projectSkillPolicy.value.skillIds
+))
+const resolvedSkillPresets = computed(() => SKILL_PRESETS.map((preset) =>
+  resolveSkillPreset(
+    preset.id,
+    presetCandidateSkills.value,
+    currentProject.value?.genre ?? '',
+    projectSkillPresetBindings.value
+  )
+))
+const activeResolvedPreset = computed(() => (
+  resolvedSkillPresets.value.find((item) => item.preset.id === activePresetId.value)
+  ?? resolvedSkillPresets.value[0]
+))
+const activePresetSkillIds = computed(() => activeResolvedPreset.value?.policy.skillIds ?? [])
+const orderedPresetSkills = computed(() => orderSkillsByPresetBinding(
+  presetCandidateSkills.value,
+  activePresetSkillIds.value
+))
 const skillPolicyModeOptions: Array<{ label: string; value: SkillUseMode }> = [
   { label: '自动匹配', value: 'auto' },
   { label: '仅使用指定 Skill', value: 'only' },
@@ -175,6 +209,12 @@ async function scanProjectSkills(): Promise<void> {
       const nextPolicyIds = projectSkillPolicy.value.skillIds
         .map((id) => canonicalIdByLegacyId.get(id) ?? id)
         .filter((id, index, all) => scannedSkills.some((skill) => skill.id === id) && all.indexOf(id) === index)
+      const nextPresetBindings = Object.fromEntries(Object.entries(projectSkillPresetBindings.value).map(([presetId, ids]) => [
+        presetId,
+        (ids ?? [])
+          .map((id) => canonicalIdByLegacyId.get(id) ?? id)
+          .filter((id, index, all) => scannedSkills.some((skill) => skill.id === id) && all.indexOf(id) === index)
+      ])) as SkillPresetBindings
 
       appStore.updateProject(currentProject.value.id, {
         projectSkills: scannedSkills.map((skill) => {
@@ -190,7 +230,8 @@ async function scanProjectSkills(): Promise<void> {
         skillPolicy: {
           ...projectSkillPolicy.value,
           skillIds: nextPolicyIds
-        }
+        },
+        skillPresetBindings: nextPresetBindings
       })
     }
   } catch (error) {
@@ -217,7 +258,15 @@ async function importProjectSkillsPackage(): Promise<void> {
     }
 
     await scanProjectSkills()
-    message.success(`已导入 ${result.importedSkillIds?.length ?? 0} 个 Skill`)
+    const imported = result.importedSkillIds?.length ?? 0
+    const updated = result.updatedSkillIds?.length ?? 0
+    const skipped = result.skippedDuplicates?.length ?? 0
+    const parts = [
+      imported > 0 ? `新增 ${imported} 个` : '',
+      updated > 0 ? `安全更新 ${updated} 个` : '',
+      skipped > 0 ? `跳过 ${skipped} 个重复项` : ''
+    ].filter(Boolean)
+    message.success(parts.length > 0 ? `Skill 导入完成：${parts.join('，')}` : '没有需要导入或更新的 Skill')
   } catch (error) {
     message.error(error instanceof Error ? error.message : 'Skill 导入失败')
   } finally {
@@ -255,17 +304,85 @@ function updateSkillPolicyMode(mode: SkillUseMode): void {
   })
 }
 
-function toggleDefaultPolicySkill(skillId: string): void {
+function toggleDefaultPolicySkill(skillId: string, checked: boolean): void {
   if (!isProjectScope.value || !currentProject.value?.id) return
   const selected = projectSkillPolicy.value.skillIds
   appStore.updateProject(currentProject.value.id, {
     skillPolicy: {
       mode: 'only',
-      skillIds: selected.includes(skillId)
-        ? selected.filter((id) => id !== skillId)
-        : [...selected, skillId]
+      skillIds: checked
+        ? [...new Set([...selected, skillId])]
+        : selected.filter((id) => id !== skillId)
     }
   })
+}
+
+function isSameSkillSelection(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((id) => right.includes(id))
+}
+
+function selectProjectSkillPreset(presetId: SkillPresetId): void {
+  activePresetId.value = presetId
+}
+
+function applyProjectSkillPreset(presetId = activePresetId.value): void {
+  if (!isProjectScope.value || !currentProject.value?.id) return
+  const resolved = resolveSkillPreset(
+    presetId,
+    presetCandidateSkills.value,
+    currentProject.value?.genre ?? '',
+    projectSkillPresetBindings.value
+  )
+  if (resolved.missingRoles.length > 0 || resolved.policy.skillIds.length === 0) {
+    message.warning(`预设缺少：${resolved.missingRoles.join('、')}`)
+    return
+  }
+  const selectedIds = new Set(resolved.policy.skillIds)
+  appStore.updateProject(currentProject.value.id, {
+    projectSkills: resolvedProjectSkills.value.map((skill) => ({
+      ...skill,
+      enabled: skill.compatibility === 'external-only' ? false : (selectedIds.has(skill.id) || skill.enabled)
+    })),
+    skillPolicy: resolved.policy
+  })
+  message.success(`已应用“${resolved.preset.name}”预设`)
+}
+
+function togglePresetBinding(skillId: string, checked: boolean): void {
+  if (!isProjectScope.value || !currentProject.value?.id || !activeResolvedPreset.value) return
+  const previousIds = activePresetSkillIds.value
+  const nextIds = checked
+    ? [...new Set([...previousIds, skillId])]
+    : previousIds.filter((id) => id !== skillId)
+  const wasCurrentDefault = projectSkillPolicy.value.mode === 'only'
+    && isSameSkillSelection(projectSkillPolicy.value.skillIds, previousIds)
+  appStore.updateProject(currentProject.value.id, {
+    skillPresetBindings: updateSkillPresetBinding(
+      projectSkillPresetBindings.value,
+      activePresetId.value,
+      nextIds
+    ),
+    ...(wasCurrentDefault ? { skillPolicy: { mode: 'only', skillIds: nextIds, presetId: activePresetId.value } } : {})
+  })
+}
+
+function resetActivePresetBinding(): void {
+  if (!isProjectScope.value || !currentProject.value?.id || !activeResolvedPreset.value) return
+  const previousIds = activePresetSkillIds.value
+  const nextBindings = resetSkillPresetBinding(projectSkillPresetBindings.value, activePresetId.value)
+  const restored = resolveSkillPreset(
+    activePresetId.value,
+    presetCandidateSkills.value,
+    currentProject.value?.genre ?? '',
+    nextBindings
+  )
+  const wasCurrentDefault = projectSkillPolicy.value.mode === 'only'
+    && isSameSkillSelection(projectSkillPolicy.value.skillIds, previousIds)
+  appStore.updateProject(currentProject.value.id, {
+    skillPresetBindings: nextBindings,
+    ...(wasCurrentDefault ? { skillPolicy: restored.policy } : {})
+  })
+  message.success(`“${restored.preset.name}”已恢复内置组合`)
 }
 
 function toggleProjectSkillStage(skillId: string, stageId: NovelWorkflowStageId): void {
@@ -305,14 +422,17 @@ async function deleteGlobalSkill(skill: ProjectSkillItem): Promise<void> {
     return
   }
   await scanProjectSkills()
-  message.success(`已删除全局 Skill：${skill.name}`)
+  const copyCount = Math.max(0, (result.deletedCopyCount ?? 1) - 1)
+  message.success(copyCount > 0
+    ? `已删除“${skill.name}”及 ${copyCount} 个历史副本`
+    : `已删除全局 Skill：${skill.name}`)
 }
 
 function requestDeleteGlobalSkill(skill: ProjectSkillItem): void {
   if (isProjectScope.value || skill.scope === 'builtin') return
   dialog.warning({
     title: '删除全局 Skill',
-    content: `确定删除“${skill.name}”吗？所有项目之后都无法再使用它，需要时可重新导入。`,
+    content: `确定删除“${skill.name}”吗？内容相同的历史项目副本也会一并删除，不会保留；需要时可重新导入。`,
     positiveText: '确认删除',
     negativeText: '取消',
     autoFocus: false,
@@ -369,33 +489,143 @@ function requestDeleteGlobalSkill(skill: ProjectSkillItem): void {
         </div>
       </div>
 
-      <section v-if="isProjectScope && resolvedProjectSkills.length > 0" class="skill-policy-card">
-        <div class="skill-policy-copy">
-          <strong>AI 对话默认规则</strong>
-          <p>全局助手和章节助手会默认继承这里的设置；你仍可在每个对话框里临时覆盖。</p>
-        </div>
-        <div class="skill-policy-controls">
-          <n-select
-            class="skill-policy-select"
-            :value="projectSkillPolicy.mode"
-            :options="skillPolicyModeOptions"
-            @update:value="updateSkillPolicyMode"
-          />
-          <div v-if="projectSkillPolicy.mode === 'only'" class="skill-policy-picker">
-            <span v-if="selectableDefaultSkills.length === 0" class="skill-policy-empty">请先启用至少一个可用 Skill。</span>
-            <template v-else>
-              <n-checkbox
-                v-for="skill in selectableDefaultSkills"
-                :key="`default-${skill.id}`"
-                :checked="projectSkillPolicy.skillIds.includes(skill.id)"
-                @update:checked="toggleDefaultPolicySkill(skill.id)"
-              >{{ skill.name }}</n-checkbox>
-            </template>
+      <section v-if="isProjectScope && resolvedProjectSkills.length > 0" class="skill-settings-stack">
+        <section class="skill-default-card">
+          <div class="skill-default-head">
+            <div class="skill-policy-copy">
+              <strong>项目默认执行规则</strong>
+              <p>这里直接决定新对话如何使用 Skill；每个对话仍可临时覆盖。</p>
+            </div>
+            <n-select
+              class="skill-policy-select"
+              :value="projectSkillPolicy.mode"
+              :options="skillPolicyModeOptions"
+              @update:value="updateSkillPolicyMode"
+            />
           </div>
-          <small v-if="projectSkillPolicy.mode === 'only' && projectSkillPolicy.skillIds.length === 0" class="skill-policy-warning">
-            当前没有选择 Skill，对话发送前需要先选择至少一个。
-          </small>
-        </div>
+
+          <div v-if="projectSkillPolicy.mode === 'only'" class="skill-default-only">
+            <div class="skill-default-list-head">
+              <div>
+                <strong>默认指定 Skill</strong>
+                <small>AI 只允许使用这里勾选的 Skill；已勾选项排在最上方。</small>
+              </div>
+              <n-tag size="small" round :bordered="false" type="primary">
+                已选 {{ projectSkillPolicy.skillIds.length }} 个
+              </n-tag>
+            </div>
+            <div class="skill-policy-picker skill-default-picker">
+              <span v-if="orderedDefaultSkills.length === 0" class="skill-policy-empty">请先在下方启用至少一个可用 Skill。</span>
+              <template v-else>
+                <n-checkbox
+                  v-for="skill in orderedDefaultSkills"
+                  :key="`default-${skill.id}`"
+                  :checked="projectSkillPolicy.skillIds.includes(skill.id)"
+                  @update:checked="toggleDefaultPolicySkill(skill.id, $event)"
+                >
+                  <span class="skill-policy-option">
+                    <strong>{{ skill.name }}</strong>
+                    <small>题材：{{ formatSkillGenreLabels(skill.genreIds) }} · {{ skill.description || '未提供功能说明' }}</small>
+                  </span>
+                </n-checkbox>
+              </template>
+            </div>
+            <small v-if="projectSkillPolicy.skillIds.length === 0" class="skill-policy-warning">
+              当前没有指定 Skill，对话发送前需要先选择至少一个。
+            </small>
+          </div>
+          <div v-else class="skill-mode-explanation">
+            <strong>{{ projectSkillPolicy.mode === 'auto' ? '由 AI 按任务自动匹配' : '所有对话默认不加载 Skill' }}</strong>
+            <span v-if="projectSkillPolicy.mode === 'auto'">会综合任务、创作阶段、项目题材和 Skill 优先级选择。</span>
+            <span v-else>需要使用时，可在单个对话里临时切换为自动或仅使用指定。</span>
+          </div>
+        </section>
+
+        <section class="skill-preset-management">
+          <div class="skill-preset-management-head">
+            <div class="skill-policy-copy">
+              <strong>快捷组合管理</strong>
+              <p>下面五组只是可编辑模板，不会因为查看或勾选就改变上方执行规则。</p>
+            </div>
+            <small>点击“应用为项目默认”，才会复制到上方的“默认指定 Skill”。</small>
+          </div>
+          <div class="skill-preset-layout">
+            <div class="skill-preset-grid">
+              <button
+                v-for="item in resolvedSkillPresets"
+                :key="item.preset.id"
+                type="button"
+                class="skill-preset-card"
+                :class="{
+                  active: activePresetId === item.preset.id,
+                  applied: projectSkillPolicy.mode === 'only' && item.policy.skillIds.length > 0 && isSameSkillSelection(projectSkillPolicy.skillIds, item.policy.skillIds)
+                }"
+                :title="item.preset.description"
+                @click="selectProjectSkillPreset(item.preset.id)"
+              >
+                <div class="skill-preset-title">
+                  <strong>{{ item.preset.name }}</strong>
+                  <span>{{ item.policy.skillIds.length }} 个 Skill</span>
+                </div>
+                <span>{{ item.preset.description }}</span>
+                <small v-if="item.customized">项目自定义</small>
+                <small v-else>内置推荐</small>
+              </button>
+            </div>
+
+            <div v-if="activeResolvedPreset" class="skill-policy-controls">
+              <div class="skill-preset-editor-head">
+                <div>
+                  <strong>编辑组合“{{ activeResolvedPreset.preset.name }}”</strong>
+                  <small>勾选结果自动保存到当前项目；已绑定项始终排在最上方。</small>
+                </div>
+                <n-tag size="small" round :bordered="false" :type="activeResolvedPreset.customized ? 'primary' : 'default'">
+                  {{ activeResolvedPreset.customized ? '项目自定义' : '内置推荐' }}
+                </n-tag>
+              </div>
+              <div class="skill-policy-picker">
+                <span v-if="orderedPresetSkills.length === 0" class="skill-policy-empty">当前项目没有可绑定的 Skill。</span>
+                <template v-else>
+                  <n-checkbox
+                    v-for="skill in orderedPresetSkills"
+                    :key="`preset-${activePresetId}-${skill.id}`"
+                    :checked="activePresetSkillIds.includes(skill.id)"
+                    :disabled="!skill.enabled"
+                    @update:checked="togglePresetBinding(skill.id, $event)"
+                  >
+                    <span class="skill-policy-option">
+                      <strong>{{ skill.name }}</strong>
+                      <small>
+                        {{ skill.enabled ? '' : '项目未启用 · ' }}题材：{{ formatSkillGenreLabels(skill.genreIds) }} · {{ skill.description || '未提供功能说明' }}
+                      </small>
+                    </span>
+                  </n-checkbox>
+                </template>
+              </div>
+              <div class="skill-preset-actions">
+                <n-button
+                  size="small"
+                  type="primary"
+                  :disabled="activePresetSkillIds.length === 0"
+                  @click="applyProjectSkillPreset()"
+                >
+                  {{ projectSkillPolicy.mode === 'only' && activePresetSkillIds.length > 0 && isSameSkillSelection(projectSkillPolicy.skillIds, activePresetSkillIds)
+                    ? '已是项目默认'
+                    : '应用为项目默认' }}
+                </n-button>
+                <n-button
+                  size="small"
+                  secondary
+                  :disabled="!activeResolvedPreset.customized"
+                  @click="resetActivePresetBinding"
+                >
+                  <template #icon><RotateCcw :size="14" /></template>
+                  恢复内置组合
+                </n-button>
+              </div>
+            </div>
+          </div>
+        </section>
       </section>
 
       <div v-if="resolvedProjectSkills.length > 0" class="project-skill-groups">
@@ -449,6 +679,7 @@ function requestDeleteGlobalSkill(skill: ProjectSkillItem): void {
                 </div>
               </div>
               <div class="project-skill-meta-row">
+                <span>适用题材：{{ formatSkillGenreLabels(skill.genreIds) }}</span>
                 <span v-if="skill.source">来源：{{ skill.source }}</span>
                 <span v-if="skill.referencesCount">资料：{{ skill.referencesCount }} 份</span>
                 <span v-if="skill.version">v{{ skill.version }}</span>
@@ -546,14 +777,87 @@ function requestDeleteGlobalSkill(skill: ProjectSkillItem): void {
   justify-content: flex-end;
 }
 
-.skill-policy-card {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.3fr);
-  gap: 20px;
+.skill-settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.skill-default-card,
+.skill-preset-management {
   padding: 16px;
   border: 1px solid color-mix(in srgb, var(--arc-primary) 28%, var(--arc-border));
   border-radius: 12px;
+}
+
+.skill-default-card {
   background: color-mix(in srgb, var(--arc-primary-soft) 54%, var(--arc-bg-surface));
+}
+
+.skill-preset-management {
+  background: var(--arc-bg-surface);
+}
+
+.skill-default-head,
+.skill-default-list-head,
+.skill-preset-management-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.skill-default-only {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--arc-primary) 22%, var(--arc-border));
+}
+
+.skill-default-list-head > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.skill-default-list-head strong,
+.skill-mode-explanation strong {
+  color: var(--arc-text-primary);
+  font-size: 13px;
+}
+
+.skill-default-list-head small,
+.skill-preset-management-head > small,
+.skill-mode-explanation span {
+  color: var(--arc-text-hint);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.skill-mode-explanation {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 14px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--arc-primary) 18%, var(--arc-border));
+  border-radius: 9px;
+  background: var(--arc-bg-surface);
+}
+
+.skill-preset-management-head > small {
+  max-width: 320px;
+  text-align: right;
+}
+
+.skill-preset-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(300px, 1.35fr);
+  gap: 20px;
+  margin-top: 14px;
 }
 
 .skill-policy-copy strong {
@@ -567,6 +871,49 @@ function requestDeleteGlobalSkill(skill: ProjectSkillItem): void {
   font-size: 12px;
   line-height: 1.65;
 }
+.skill-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.skill-preset-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--arc-border);
+  border-radius: 9px;
+  background: var(--arc-bg-surface);
+  text-align: left;
+  cursor: pointer;
+}
+.skill-preset-card strong { color: var(--arc-text-primary); font-size: 12px; }
+.skill-preset-card span {
+  color: var(--arc-text-hint);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.skill-preset-card:hover:not(:disabled),
+.skill-preset-card.active {
+  border-color: color-mix(in srgb, var(--arc-primary) 48%, var(--arc-border));
+  background: var(--arc-primary-soft);
+}
+.skill-preset-card.applied {
+  box-shadow: inset 3px 0 0 var(--arc-primary);
+}
+.skill-preset-card:disabled { cursor: not-allowed; opacity: 0.42; }
+.skill-preset-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.skill-preset-title > span,
+.skill-preset-card > small {
+  color: var(--arc-primary);
+  font-size: 10px;
+}
 
 .skill-policy-controls,
 .skill-policy-picker {
@@ -574,9 +921,53 @@ function requestDeleteGlobalSkill(skill: ProjectSkillItem): void {
   flex-direction: column;
   gap: 8px;
 }
+.skill-policy-option {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+  vertical-align: top;
+}
+.skill-policy-option strong { color: var(--arc-text-primary); font-size: 12px; }
+.skill-policy-option small {
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--arc-text-hint);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .skill-policy-select {
   width: 220px;
+}
+
+.skill-preset-editor-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.skill-preset-editor-head > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.skill-preset-editor-head strong {
+  color: var(--arc-text-primary);
+  font-size: 13px;
+}
+.skill-preset-editor-head small {
+  color: var(--arc-text-hint);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.skill-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .skill-policy-picker {
@@ -586,6 +977,10 @@ function requestDeleteGlobalSkill(skill: ProjectSkillItem): void {
   border: 1px solid var(--arc-border);
   border-radius: 9px;
   background: var(--arc-bg-surface);
+}
+
+.skill-default-picker {
+  max-height: 220px;
 }
 
 .skill-policy-empty,
@@ -599,12 +994,22 @@ function requestDeleteGlobalSkill(skill: ProjectSkillItem): void {
 }
 
 @media (max-width: 760px) {
-  .skill-policy-card {
+  .skill-preset-layout {
     grid-template-columns: 1fr;
+  }
+  .skill-default-head,
+  .skill-default-list-head,
+  .skill-preset-management-head {
+    flex-direction: column;
+  }
+  .skill-preset-management-head > small {
+    max-width: none;
+    text-align: left;
   }
   .skill-policy-select {
     width: 100%;
   }
+  .skill-preset-grid { grid-template-columns: 1fr; }
 }
 
 .project-skill-groups {

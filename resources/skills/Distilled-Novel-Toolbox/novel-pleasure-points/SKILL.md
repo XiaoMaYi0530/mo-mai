@@ -1,6 +1,6 @@
 ---
-name: novel-pleasure-points
-description: 网文爽点模式大全与疲劳管理。当用户需要设计爽感、打脸桥段、逆袭高潮、金手指设定、装逼场景，或需要分析爽点心理机制、控制爽点密度、防止读者审美疲劳时触发。覆盖60+种爽点模式及其结构模板。
+name: 爽点设计
+description: 设计爽点类型、兑现路径、高潮密度与疲劳管理；用于大纲和章节桥段，不承担完整文风控制。
 license: MIT
 compatibility: opencode
 metadata:
@@ -11,6 +11,8 @@ manifest:
   compatibility: native
   enabled: true
   priority: 7
+  genres:
+    - general
   stages:
     - outline
     - draft

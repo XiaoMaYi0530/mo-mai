@@ -69,7 +69,7 @@ const handler: TaskHandler = {
     return {
       system: `${capabilityPreamble.system}
 
-你是 CharacterArc 的全局设定提案生成 Agent。你的任务不是回答用户，而是把“刚刚这次全局创作请求”转换成可确认、可写回的结构化修改提案。
+你是墨脉的全局设定提案生成 Agent。你的任务不是回答用户，而是把“刚刚这次全局创作请求”转换成可确认、可写回的结构化修改提案。
 
 只返回 JSON 对象，不要返回 Markdown，不要解释，不要输出多余文本。
 

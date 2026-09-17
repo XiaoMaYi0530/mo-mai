@@ -9,6 +9,7 @@ import {
   searchProjectData
 } from './chapter-data-access'
 import { formatTextWindowNote, sliceTextWindow } from './text-window'
+import { chapterHtmlToPlainText } from '../../../../shared/chapter-text.ts'
 
 export type ChapterToolCallbacks = {
   currentChapterId: string
@@ -135,13 +136,7 @@ export function createChapterTools(callbacks: ChapterToolCallbacks): Tool[] {
 
       const includeContent = input.include_content !== false
       const plainContent = includeContent
-        ? chapter.content
-            .replace(/<[^>]*>/g, '')
-            .replace(/&nbsp;/g, ' ')
-            .replace(/&amp;/g, '&')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .trim()
+        ? chapterHtmlToPlainText(chapter.content)
         : null
 
       const lines = [

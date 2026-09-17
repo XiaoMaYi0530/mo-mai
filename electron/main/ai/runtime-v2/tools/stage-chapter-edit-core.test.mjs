@@ -9,7 +9,7 @@ const chapters = [
   { id: 'chapter-2', title: '第二章 入城', summary: '', status: 'draft', wordCount: 12 }
 ]
 
-function makeDataAccess(calls = []) {
+function makeDataAccess(calls = [], computeOverride) {
   return {
     async readChapterFromDb(_projectId, chapterId) {
       return chapters.find((chapter) => chapter.id === chapterId) ?? null
@@ -19,6 +19,7 @@ function makeDataAccess(calls = []) {
     },
     async computeChapterEdit(projectId, chapterId, edit, overrideContent) {
       calls.push({ projectId, chapterId, edit, overrideContent })
+      if (computeOverride) return computeOverride(projectId, chapterId, edit, overrideContent)
       const oldContent = overrideContent ?? `<p>${chapterId}:old</p>`
       const newContent = `${oldContent}<p>${edit.content}</p>`
       return {
@@ -41,8 +42,9 @@ function makeTool(options = {}) {
     turnId: 'turn-1',
     projectId: 'project-1',
     stagedStore,
-    dataAccess: makeDataAccess(calls),
-    currentChapterId: options.currentChapterId
+    dataAccess: makeDataAccess(calls, options.computeChapterEdit),
+    currentChapterId: options.currentChapterId,
+    originalUserPrompt: options.originalUserPrompt
   })
   return { tool, stagedStore, calls }
 }
@@ -135,4 +137,72 @@ test('同一轮多次暂存会基于上一条暂存后的章节正文继续计�
   assert.equal(calls[0].overrideContent, undefined)
   assert.equal(calls[1].overrideContent, changes[0].chapterHtml.new)
   assert.equal(changes[1].chapterHtml.old, changes[0].chapterHtml.new)
+})
+
+test('整章润色误用短 search 时自动改为 replace_all，避免把新稿插到旧稿前面', async () => {
+  const oldPlain = '旧正文句子。'.repeat(120)
+  const oldHtml = `<p>${oldPlain}</p>`
+  const polished = '润色后的正文句子。'.repeat(90)
+  const computeChapterEdit = async (_projectId, _chapterId, edit, overrideContent) => {
+    const oldContent = overrideContent ?? oldHtml
+    const newContent = edit.operation === 'replace_all'
+      ? `<p>${edit.content}</p>`
+      : oldContent.replace(edit.search, edit.content)
+    return {
+      oldContent,
+      newContent,
+      preview: edit.operation,
+      chapterTitle: '第一章 雨夜',
+      beforeFragment: edit.operation === 'replace_all' ? oldPlain : edit.search ?? '',
+      afterFragment: edit.content
+    }
+  }
+  const { tool, stagedStore, calls } = makeTool({
+    currentChapterId: 'chapter-1',
+    computeChapterEdit,
+    originalUserPrompt: `【选中内容】\n${oldPlain}\n\n【用户指令】\n整章润色`
+  })
+
+  const result = await runTool(tool, {
+    operation: 'replace',
+    search: '旧正文句子。',
+    content: polished,
+    reason: '整章润色'
+  })
+
+  assert.equal(result.isError, undefined)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1].edit.operation, 'replace_all')
+  const [change] = stagedStore.list({}, 'session-1')
+  assert.equal(change.chapterHtml.new, `<p>${polished}</p>`)
+  assert.doesNotMatch(change.chapterHtml.new, /旧正文句子/)
+})
+
+test('局部短 search 却提交接近整章的新稿时拒绝暂存', async () => {
+  const oldPlain = '旧正文句子。'.repeat(120)
+  const oldHtml = `<p>${oldPlain}</p>`
+  const replacement = '扩写后的正文句子。'.repeat(90)
+  const { tool, stagedStore } = makeTool({
+    currentChapterId: 'chapter-1',
+    originalUserPrompt: '扩写开头第一句',
+    computeChapterEdit: async (_projectId, _chapterId, edit) => ({
+      oldContent: oldHtml,
+      newContent: oldHtml.replace(edit.search, edit.content),
+      preview: 'replace',
+      chapterTitle: '第一章 雨夜',
+      beforeFragment: edit.search ?? '',
+      afterFragment: edit.content
+    })
+  })
+
+  const result = await runTool(tool, {
+    operation: 'replace',
+    search: '旧正文句子。',
+    content: replacement,
+    reason: '扩写开头'
+  })
+
+  assert.equal(result.isError, true)
+  assert.match(result.content, /疑似把整章内容用于局部替换/)
+  assert.equal(stagedStore.list({}, 'session-1').length, 0)
 })

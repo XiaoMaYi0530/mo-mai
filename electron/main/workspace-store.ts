@@ -71,11 +71,13 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
       target_platform TEXT NOT NULL DEFAULT '',
       cover_history_json TEXT NOT NULL DEFAULT '[]',
       reference_works_json TEXT NOT NULL DEFAULT '[]',
+      style_fingerprint_binding_json TEXT NOT NULL DEFAULT '{}',
       writing_style_preset_id TEXT NOT NULL DEFAULT 'cinematic-cool',
       writing_style_prompt TEXT NOT NULL DEFAULT '',
       novel_workflow_stages_json TEXT NOT NULL DEFAULT '[]',
       project_skills_json TEXT NOT NULL DEFAULT '[]',
       skill_policy_json TEXT NOT NULL DEFAULT '{"mode":"auto","skillIds":[]}',
+      skill_preset_bindings_json TEXT NOT NULL DEFAULT '{}',
       chapter_assistant_templates_json TEXT NOT NULL DEFAULT '[]'
     ) STRICT;
 
@@ -713,6 +715,10 @@ function ensureProjectColumns(db: DatabaseSync): void {
     db.exec(`ALTER TABLE projects ADD COLUMN skill_policy_json TEXT NOT NULL DEFAULT '{"mode":"auto","skillIds":[]}';`)
   }
 
+  if (!columnNames.has('skill_preset_bindings_json')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN skill_preset_bindings_json TEXT NOT NULL DEFAULT '{}';`)
+  }
+
   if (!columnNames.has('target_platform')) {
     db.exec(`ALTER TABLE projects ADD COLUMN target_platform TEXT NOT NULL DEFAULT '';`)
   }
@@ -723,6 +729,9 @@ function ensureProjectColumns(db: DatabaseSync): void {
 
   if (!columnNames.has('reference_works_json')) {
     db.exec(`ALTER TABLE projects ADD COLUMN reference_works_json TEXT NOT NULL DEFAULT '[]';`)
+  }
+  if (!columnNames.has('style_fingerprint_binding_json')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN style_fingerprint_binding_json TEXT NOT NULL DEFAULT '{}';`)
   }
 }
 
@@ -750,20 +759,24 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
       writing_style_preset_id AS writingStylePresetId,
       writing_style_prompt AS writingStylePrompt,
       reference_works_json AS referenceWorksJson,
+      style_fingerprint_binding_json AS styleFingerprintBindingJson,
       novel_workflow_stages_json AS novelWorkflowStagesJson,
       project_skills_json AS projectSkillsJson,
       skill_policy_json AS skillPolicyJson,
+      skill_preset_bindings_json AS skillPresetBindingsJson,
       chapter_assistant_templates_json AS chapterAssistantTemplatesJson
     FROM projects
     ORDER BY rowid ASC
   `).all() as Array<
-    Omit<WorkspacePayload['projects'][number], 'chapterAssistantTemplates' | 'novelWorkflowStages' | 'projectSkills' | 'skillPolicy' | 'coverHistory' | 'selectedReferenceWorkIds'> & {
+    Omit<WorkspacePayload['projects'][number], 'chapterAssistantTemplates' | 'novelWorkflowStages' | 'projectSkills' | 'skillPolicy' | 'skillPresetBindings' | 'coverHistory' | 'selectedReferenceWorkIds' | 'styleFingerprintBinding'> & {
       coverHistoryJson?: string
       referenceWorksJson?: string
+      styleFingerprintBindingJson?: string
       chapterAssistantTemplatesJson?: string
       novelWorkflowStagesJson?: string
       projectSkillsJson?: string
       skillPolicyJson?: string
+      skillPresetBindingsJson?: string
     }
   >
 
@@ -772,9 +785,16 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
       ...project,
       coverHistory: parseJson(project.coverHistoryJson, []),
       selectedReferenceWorkIds: parseJson(project.referenceWorksJson, [] as string[]),
+      styleFingerprintBinding: parseJson(project.styleFingerprintBindingJson, {
+        version: 1,
+        primaryReferenceWorkId: '',
+        primaryWeight: 100,
+        auxiliary: []
+      }),
       novelWorkflowStages: parseJson(project.novelWorkflowStagesJson, []),
       projectSkills: parseJson(project.projectSkillsJson, []),
       skillPolicy: parseJson(project.skillPolicyJson, { mode: 'auto', skillIds: [] }),
+      skillPresetBindings: parseJson(project.skillPresetBindingsJson, {}),
       chapterAssistantTemplates: parseJson(project.chapterAssistantTemplatesJson, [])
     })
   )
@@ -1402,8 +1422,8 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
     }
 
     const insertProject = db.prepare(`
-      INSERT INTO projects (id, title, genre, novel_length, word_count, last_edited, cover, target_platform, cover_history_json, reference_works_json, writing_style_preset_id, writing_style_prompt, novel_workflow_stages_json, project_skills_json, skill_policy_json, chapter_assistant_templates_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO projects (id, title, genre, novel_length, word_count, last_edited, cover, target_platform, cover_history_json, reference_works_json, style_fingerprint_binding_json, writing_style_preset_id, writing_style_prompt, novel_workflow_stages_json, project_skills_json, skill_policy_json, skill_preset_bindings_json, chapter_assistant_templates_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         genre = excluded.genre,
@@ -1414,11 +1434,13 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
         target_platform = excluded.target_platform,
         cover_history_json = excluded.cover_history_json,
         reference_works_json = excluded.reference_works_json,
+        style_fingerprint_binding_json = excluded.style_fingerprint_binding_json,
         writing_style_preset_id = excluded.writing_style_preset_id,
         writing_style_prompt = excluded.writing_style_prompt,
         novel_workflow_stages_json = excluded.novel_workflow_stages_json,
         project_skills_json = excluded.project_skills_json,
         skill_policy_json = excluded.skill_policy_json,
+        skill_preset_bindings_json = excluded.skill_preset_bindings_json,
         chapter_assistant_templates_json = excluded.chapter_assistant_templates_json
     `)
     for (const project of payload.projects) {
@@ -1434,11 +1456,13 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
         project.targetPlatform,
         JSON.stringify(project.coverHistory ?? []),
         JSON.stringify(project.selectedReferenceWorkIds ?? []),
+        JSON.stringify(project.styleFingerprintBinding ?? {}),
         project.writingStylePresetId,
         project.writingStylePrompt,
         JSON.stringify(project.novelWorkflowStages ?? []),
         JSON.stringify(project.projectSkills ?? []),
         JSON.stringify(project.skillPolicy ?? { mode: 'auto', skillIds: [] }),
+        JSON.stringify(project.skillPresetBindings ?? {}),
         JSON.stringify(project.chapterAssistantTemplates ?? [])
       )
     }

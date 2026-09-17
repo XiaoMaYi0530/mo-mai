@@ -27,6 +27,7 @@ import type {
   TurnEvent,
   TurnStatus
 } from '@shared/assistant-runtime'
+import { collectStyleFingerprintReferenceIds, isStyleFingerprintDocument, remapStyleFingerprintBinding } from '@shared/style-fingerprint-binding'
 
 export type ProjectArchiveModule =
   | 'project'
@@ -524,9 +525,21 @@ export async function exportProjectArchive(options: ExportProjectArchiveOptions)
     throw new Error('未找到要导出的当前项目。')
   }
 
-  const referenceIdSet = new Set(project.selectedReferenceWorkIds ?? [])
+  const referenceIdSet = new Set([
+    ...(project.selectedReferenceWorkIds ?? []),
+    ...collectStyleFingerprintReferenceIds(project.styleFingerprintBinding)
+  ])
   const referenceWorks = snapshot.referenceWorks.filter((work) => referenceIdSet.has(work.id))
-  const knowledgeDocuments = readProjectKnowledgeDocuments(options.db, project.id)
+  const projectKnowledgeDocuments = readProjectKnowledgeDocuments(options.db, project.id)
+  const fingerprintDocuments = snapshot.knowledgeDocuments.filter((document) => {
+    if (!isStyleFingerprintDocument(document)) return false
+    const referenceWorkId = String(document.metadata?.referenceWorkId ?? '').trim()
+    const sourceTitle = String(document.metadata?.sourceTitle ?? '').trim()
+    return referenceIdSet.has(referenceWorkId) || referenceWorks.some((work) => work.title === sourceTitle)
+  })
+  const knowledgeDocuments = [...projectKnowledgeDocuments, ...fingerprintDocuments.filter((document) => (
+    !projectKnowledgeDocuments.some((current) => current.id === document.id)
+  ))]
   const assistantV2 = readAssistantV2Archive(options.db, project.id)
   const zip = new JSZip()
   const assetDir = join(getWorkspaceDirPath(), 'reference-novels')
@@ -578,7 +591,7 @@ export async function inspectProjectArchive(filePath: string): Promise<ProjectAr
   const zip = await JSZip.loadAsync(await readFile(filePath))
   const manifest = await readZipJson<ProjectArchiveManifest | null>(zip, 'manifest.json', null)
   if (!manifest || manifest.app !== 'CharacterArc' || !manifest.projectId || !manifest.projectTitle) {
-    throw new Error('这不是有效的 CharacterArc 项目归档包。')
+    throw new Error('这不是有效的墨脉项目归档包。')
   }
 
   return {
@@ -760,7 +773,10 @@ function remapArchiveContent(
     lastEdited: new Date().toISOString(),
     selectedReferenceWorkIds: modules.has('referenceWorks')
       ? (content.project.selectedReferenceWorkIds ?? []).map((id) => mapId(idMap, id)).filter(Boolean)
-      : []
+      : [],
+    styleFingerprintBinding: modules.has('referenceWorks')
+      ? remapStyleFingerprintBinding(content.project.styleFingerprintBinding, (id) => mapId(idMap, id))
+      : { version: 1, primaryReferenceWorkId: '', primaryWeight: 100, auxiliary: [] }
   }
   const workspace: ProjectWorkspace = {
     worldviewEntries: modules.has('worldview')
@@ -865,7 +881,10 @@ function remapArchiveContent(
     ? content.knowledgeDocuments.map((document) => ({
         ...document,
         id: mapId(idMap, document.id),
-        projectId: targetProjectId
+        projectId: isStyleFingerprintDocument(document) ? undefined : targetProjectId,
+        metadata: document.metadata?.referenceWorkId
+          ? { ...document.metadata, referenceWorkId: mapId(idMap, String(document.metadata.referenceWorkId)) }
+          : document.metadata
       }))
     : []
   const assets = new Map<string, Buffer>()
@@ -1015,11 +1034,16 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
               writingStylePrompt: incoming.project.writingStylePrompt,
               novelWorkflowStages: incoming.project.novelWorkflowStages,
               projectSkills: incoming.project.projectSkills,
+              skillPresetBindings: incoming.project.skillPresetBindings,
               chapterAssistantTemplates: incoming.project.chapterAssistantTemplates,
-              coverHistory: incoming.project.coverHistory
+              coverHistory: incoming.project.coverHistory,
+              styleFingerprintBinding: incoming.project.styleFingerprintBinding
             }
           : {}),
-        ...(modules.has('referenceWorks') ? { selectedReferenceWorkIds: incoming.project.selectedReferenceWorkIds } : {}),
+        ...(modules.has('referenceWorks') ? {
+          selectedReferenceWorkIds: incoming.project.selectedReferenceWorkIds,
+          styleFingerprintBinding: incoming.project.styleFingerprintBinding
+        } : {}),
         lastEdited: new Date().toISOString()
       }
     })

@@ -54,12 +54,24 @@ function targetStageTools(text: string): Set<string> {
  */
 export function selectToolsForTurn<T extends NamedToolLike>(
   tools: readonly T[],
-  params: { surface: SurfaceDefinition; intent: AssistantPlanIntent; userMessage: string }
+  params: {
+    surface: SurfaceDefinition
+    intent: AssistantPlanIntent
+    userMessage: string
+    skillStageId?: 'reference' | 'premise' | 'setting' | 'outline' | 'draft'
+  }
 ): T[] {
   if (params.surface.scope === 'chapter' || params.surface.scope === 'selection') return [...tools]
 
   const text = params.userMessage.replace(/\s+/g, '')
   const targetTools = targetStageTools(text)
+  if (targetTools.size === 0 && params.skillStageId === 'outline') {
+    targetTools.add('stage_outline')
+    targetTools.add('stage_outline_volume')
+  }
+  if (targetTools.size === 0 && params.skillStageId === 'draft') {
+    for (const name of CHAPTER_STAGE_TOOLS) targetTools.add(name)
+  }
   const allowAllStages = params.intent === 'ingest'
     || (targetTools.size === 0 && (
       params.intent === 'correct'

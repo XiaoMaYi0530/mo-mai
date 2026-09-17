@@ -621,10 +621,13 @@ declare global {
         success: boolean
         canceled: boolean
         importedSkillIds?: string[]
+        updatedSkillIds?: string[]
+        skippedDuplicates?: Array<{ sourceSkillId: string; existingSkillId: string }>
         error?: string
       }>
       deleteGlobalSkill: (skillId: string) => Promise<{
         success: boolean
+        deletedCopyCount?: number
         error?: string
       }>
       getProjectSkillsContext: (projectId: string) => Promise<{

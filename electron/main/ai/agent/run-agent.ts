@@ -1,12 +1,12 @@
 import { streamText, stepCountIs, dynamicTool, jsonSchema } from 'ai'
-import { buildSystemPrompt, createModel } from '../provider'
+import { buildSystemPrompt, createModel } from '../provider.ts'
 import type { AiRunUsage, AppSettings, AiAgentStreamHandlers, ToolCallTrace } from '../shared-types'
 import type { Tool, ToolContext } from './tools/types'
-import { stripReasoningMarkup } from '../reasoning'
-import { isAiStreamIdleTimeoutError } from '../sse'
-import { resolveSamplingOptions } from '../request-options'
-import { isCodexCliProvider } from '@shared/ai-provider-catalog'
-import { runCodexToolAgent } from './codex-tool-bridge'
+import { stripReasoningMarkup } from '../reasoning.ts'
+import { isAiStreamIdleTimeoutError } from '../sse.ts'
+import { resolveSamplingOptions } from '../request-options.ts'
+import { isCodexCliProvider } from '../../../shared/ai-provider-catalog.ts'
+import { runCodexToolAgent } from './codex-tool-bridge.ts'
 
 export type RunAgentParams = {
   settings: AppSettings
@@ -18,6 +18,8 @@ export type RunAgentParams = {
   maxTokens?: number
   maxSteps?: number
   disableTools?: boolean
+  /** 任务完成前至少成功调用一次的工具；用于拆书等必须真实落库的任务。 */
+  requiredToolNames?: string[]
 }
 
 export type RunAgentResult = {

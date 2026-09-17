@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { CheckCircle2, Circle, CircleAlert, LoaderCircle, Pause, Play, Square } from 'lucide-vue-next'
 import { NButton, NModal, NProgress, NTag } from 'naive-ui'
+import ChapterDraftStreamView from './ChapterDraftStreamView.vue'
 
 export type ChapterBatchDraftItem = {
   chapterId: string
@@ -19,6 +20,9 @@ const props = defineProps<{
   progressPercent: number
   progressText: string
   executionLabel: string
+  reasoningContent?: string
+  previewTitle?: string
+  previewContent?: string
 }>()
 
 const emit = defineEmits<{
@@ -63,6 +67,14 @@ const allComplete = computed(() => props.items.length > 0 && completedCount.valu
         <NProgress type="line" :percentage="progressPercent" :show-indicator="false" />
         <span>{{ progressText || executionLabel || '正在准备章节上下文…' }}</span>
       </div>
+
+      <ChapterDraftStreamView
+        v-if="currentItem"
+        :output-title="previewTitle || `《${currentItem.title}》实时输出`"
+        :output-content="previewContent"
+        :reasoning-content="reasoningContent"
+        :placeholder="executionLabel || 'AI 正在准备当前章节内容'"
+      />
 
       <div class="batch-items arc-scrollbar">
         <div v-for="item in items" :key="item.chapterId" class="batch-item">

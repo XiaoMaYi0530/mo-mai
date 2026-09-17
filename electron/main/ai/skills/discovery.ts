@@ -80,7 +80,7 @@ async function loadSkillDefinition(root: string, dirName: string, scope: 'builti
     const content = await readFile(skillPath, 'utf-8')
     const frontmatter = parseSkillFrontmatter(content)
     const validatedManifest = validateManifest(frontmatter.manifest)
-    const heuristic = inferSkillMeta(dirName, frontmatter.description)
+    const heuristic = inferSkillMeta(dirName, frontmatter.description, frontmatter.name)
     const fullManifest = buildFullManifest(validatedManifest, heuristic)
 
     const referencesDir = join(skillDir, 'references')

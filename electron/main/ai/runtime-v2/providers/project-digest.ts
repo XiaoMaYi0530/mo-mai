@@ -1,5 +1,5 @@
 import type { ContextBuildRequest, ContextSlice } from '@shared/assistant-runtime'
-import { buildProjectDigest } from '../context-memory'
+import { buildCreativeMemoryLedger } from '../context-memory'
 import type { ContextProvider } from '../context-builder'
 import { getProjectView, makeSlice, type SnapshotAccessor } from './shared'
 
@@ -12,7 +12,7 @@ export function makeProjectDigestProvider(accessor: SnapshotAccessor): ContextPr
       const snapshot = accessor.getSnapshot()
       const view = getProjectView(snapshot, request.projectId)
       if (!snapshot || !view) return null
-      const body = buildProjectDigest({
+      const body = buildCreativeMemoryLedger({
         project: view.project,
         workspace: view.workspace,
         knowledgeDocuments: snapshot.knowledgeDocuments,

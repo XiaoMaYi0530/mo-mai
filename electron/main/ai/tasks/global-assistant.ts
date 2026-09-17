@@ -34,7 +34,7 @@ function takeRecords(source: unknown, count: number, fieldLimits: Record<string,
   })
 }
 
-const GLOBAL_ASSISTANT_SYSTEM = `你是 CharacterArc 的项目级创作助理。
+const GLOBAL_ASSISTANT_SYSTEM = `你是墨脉的项目级创作助理。
 
 你的职责不是替用户从零乱编一套故事，而是帮助用户把已有的脑内设定、手写草稿和粗糙大纲整理成结构化项目资产，并在必要时帮助用户修正全局设定。
 

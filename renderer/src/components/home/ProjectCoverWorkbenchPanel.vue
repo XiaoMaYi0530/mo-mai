@@ -96,7 +96,9 @@ function createWorkbenchInput(): CoverPromptWorkbenchInput | null {
       novelWorkflowStages: [],
       projectSkills: [],
       skillPolicy: { mode: 'auto', skillIds: [] },
+      skillPresetBindings: {},
       selectedReferenceWorkIds: [],
+      styleFingerprintBinding: { version: 1, primaryReferenceWorkId: '', primaryWeight: 100, auxiliary: [] },
       coverHistory: []
     },
     referenceWorks: [],
@@ -279,9 +281,9 @@ function formatDate(iso: string): string {
     <!-- 顶部标题 -->
     <div class="workbench-header">
       <div class="header-text">
-        <span class="cover-kicker">Image Studio · story-cover skill</span>
+        <span class="cover-kicker">AI 小说封面工作台</span>
         <h2>封面生图工作台</h2>
-        <p>基于 story-cover skill 自动分析题材与平台风格，生成专业级网文封面提示词并调用生图模型一键出图。</p>
+        <p>根据题材与平台风格生成专业级网文封面提示词，并调用生图模型一键出图。</p>
       </div>
     </div>
 

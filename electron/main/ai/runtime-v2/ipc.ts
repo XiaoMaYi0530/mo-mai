@@ -332,7 +332,10 @@ function registerTurnHandlers(): void {
       }
       const request: TurnSendRequest = {
         ...payload,
-        sessionId: session.id
+        sessionId: session.id,
+        previousSkillStageId: persistedSession
+          ? cm.getLatestCompletedSkillStage(session.id)
+          : undefined
       }
       const plan = await resolvePlan({ session, surface: payload.surface, request })
       return plan.preview
@@ -357,12 +360,17 @@ function registerTurnHandlers(): void {
         const session = cm.getSession(payload.sessionId)
         if (!session) throw new Error(`session not found: ${payload.sessionId}`)
         const startedAt = new Date().toISOString()
+        const request: TurnSendRequest = {
+          ...payload,
+          // 由主进程从已完成轮次计算，覆盖任何不可信的渲染进程输入。
+          previousSkillStageId: cm.getLatestCompletedSkillStage(session.id)
+        }
 
         // 组装执行计划（Phase 2 实现），拿到 systemPrompt + tools + settings
         const plan = await resolvePlan({
           session,
           surface: payload.surface,
-          request: payload
+          request
         })
 
         // Emitter：把 TurnEvent 通过 EVENT_STREAM 通道 push 到发起方 window

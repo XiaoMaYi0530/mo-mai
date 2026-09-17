@@ -249,6 +249,7 @@ export class ConversationManager {
     listEventsByTurn: StatementSync
     maxSeqByTurn: StatementSync
     upsertTurnState: StatementSync
+    latestCompletedTurnState: StatementSync
   }
 
   constructor(db: DatabaseSync) {
@@ -336,6 +337,14 @@ export class ConversationManager {
            resumable = excluded.resumable,
            continuation_prompt = excluded.continuation_prompt,
            updated_at = excluded.updated_at`
+      ),
+      latestCompletedTurnState: db.prepare(
+        `SELECT state.plan_json
+         FROM assistant_turn_states state
+         INNER JOIN assistant_turns turn_row ON turn_row.id = state.turn_id
+         WHERE state.session_id = ? AND turn_row.status = 'done'
+         ORDER BY turn_row.rowid DESC
+         LIMIT 1`
       )
     }
   }
@@ -564,5 +573,20 @@ export class ConversationManager {
       now,
       now
     )
+  }
+
+  /** 最近一轮成功完成的 Skill 阶段；失败、取消或仍在执行的轮次不参与继承。 */
+  getLatestCompletedSkillStage(sessionId: string): 'reference' | 'premise' | 'setting' | 'outline' | 'draft' | undefined {
+    const row = this.stmts.latestCompletedTurnState.get(sessionId) as { plan_json: string } | undefined
+    if (!row?.plan_json) return undefined
+    try {
+      const stageId = String((JSON.parse(row.plan_json) as { skillStageId?: unknown }).skillStageId ?? '')
+      return stageId === 'reference' || stageId === 'premise' || stageId === 'setting' ||
+        stageId === 'outline' || stageId === 'draft'
+        ? stageId
+        : undefined
+    } catch {
+      return undefined
+    }
   }
 }

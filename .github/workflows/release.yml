@@ -102,7 +102,7 @@ jobs:
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: CharacterArc-macos-${{ matrix.arch }}
+          name: MoMai-macos-${{ matrix.arch }}
           if-no-files-found: error
           path: |
             dist/*.dmg
@@ -159,7 +159,7 @@ jobs:
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: CharacterArc-windows-${{ matrix.arch }}
+          name: MoMai-windows-${{ matrix.arch }}
           if-no-files-found: error
           path: |
             dist/*.exe
@@ -219,7 +219,7 @@ jobs:
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: CharacterArc-linux-${{ matrix.arch }}
+          name: MoMai-linux-${{ matrix.arch }}
           if-no-files-found: error
           path: |
             dist/*.AppImage
@@ -253,7 +253,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: CharacterArc-*
+          pattern: MoMai-*
           merge-multiple: false
 
       - name: Prepare release assets
@@ -272,7 +272,7 @@ jobs:
       - name: Purge jsDelivr CDN cache
         if: success()
         run: |
-          curl -sS "https://purge.jsdelivr.net/gh/uu201/character-arc@main/announcements.json"
+          curl -sS "https://purge.jsdelivr.net/gh/15810785091/mo-mai@main/announcements.json"
           echo ""
-          curl -sS "https://purge.jsdelivr.net/gh/uu201/character-arc@main/CHANGELOG.md"
+          curl -sS "https://purge.jsdelivr.net/gh/15810785091/mo-mai@main/CHANGELOG.md"
           echo ""

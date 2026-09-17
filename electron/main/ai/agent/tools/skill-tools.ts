@@ -5,6 +5,7 @@ import { loadSkillReferenceFile, resolveSkillRelativePath } from '../../skills/l
 import { runScript } from './script-runner'
 import { formatTextWindowNote, sliceTextWindow } from './text-window'
 import type { Tool, ToolHandlerResult } from './types'
+import { formatSkillGenreLabels } from '../../../../shared/skill-genres'
 
 export type SkillToolFactoryOptions = {
   /** 按 id 查 skill。projectId 已经被 orchestrator 注入，这里只接受 id。 */
@@ -23,6 +24,8 @@ export type SkillToolFactoryOptions = {
   maxGlobEntries?: number
   /** 脚本超时毫秒。默认 30s。 */
   scriptTimeoutMs?: number
+  /** 按本轮任务返回 Skill 主体切片；未提供时返回完整内容。 */
+  resolveSkillLoadContent?: (skill: SkillDefinition) => string
 }
 
 /** 参考文件单次读取默认字符上限（0 = 不截断） */
@@ -74,6 +77,7 @@ function formatSkillListEntry(skill: SkillDefinition, enabled: boolean): string 
     `来源：${scope}（${skill.path}）`,
     `分类：${skill.manifest.category}`,
     `阶段：${stageIds}`,
+    `题材：${formatSkillGenreLabels(skill.manifest.genres)}`,
     `适配：${skill.compatibility}`,
     `参考文件：${skill.referencesCount}`,
     `一句话：${desc}`
@@ -159,7 +163,7 @@ export function createSkillTools(opts: SkillToolFactoryOptions): Tool[] {
   const skillLoad: Tool = {
     definition: {
       name: 'skill_load',
-      description: '加载并返回指定 skill 的完整 SKILL.md 内容（含 frontmatter 与正文）。当模型需要查看一个 skill 的方法论详情时使用。',
+      description: '按当前任务加载指定 Skill 的相关方法论。长 Skill 只返回本轮相关章节，更细的资料可再用 skill_read_reference 按需读取。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -173,7 +177,7 @@ export function createSkillTools(opts: SkillToolFactoryOptions): Tool[] {
         const skillId = requireString(input, 'skill_id')
         const result = resolveSkillOrError(skillId)
         if ('error' in result) return err(result.error)
-        return ok(result.content)
+        return ok(opts.resolveSkillLoadContent?.(result) ?? result.content)
       } catch (error) {
         return err(error instanceof Error ? error.message : String(error))
       }

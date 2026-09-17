@@ -29,6 +29,7 @@ import type {
   TurnTruncateResult
 } from '@shared/assistant-runtime'
 import { normalizeSkillUsePolicy } from '@shared/assistant-runtime'
+import { resolveSkillPreset, SKILL_PRESETS } from '@shared/skill-presets'
 
 // ============================================================================
 // UI 消息模型
@@ -228,7 +229,11 @@ export function useAssistant(options: UseAssistantOptions) {
             return scannedSkills.find((skill) => skill.description.trim() === legacy.description.trim())?.id ?? ''
           })
           .filter((id, index, all) => Boolean(id) && all.indexOf(id) === index)
-        skillPolicy.value = { mode: 'only', skillIds: canonicalIds }
+        skillPolicy.value = {
+          mode: 'only',
+          skillIds: canonicalIds,
+          ...(skillPolicy.value.presetId ? { presetId: skillPolicy.value.presetId } : {})
+        }
       }
     } catch {
       // Skill 选择器仍可回退到项目已保存的列表，不阻断对话。
@@ -244,6 +249,30 @@ export function useAssistant(options: UseAssistantOptions) {
     }
     turnPreview.value = null
     lastError.value = null
+  }
+
+  /**
+   * 兼容旧项目：历史策略只保存 Skill ID，没有 presetId。若 ID 集合恰好对应快捷组合，
+   * 在发请求时补上组合标识，让 Runtime 能用它判断模糊追问所处阶段。
+   */
+  function resolveRequestSkillPolicy(): SkillUsePolicy {
+    const policy = normalizeSkillUsePolicy(skillPolicy.value)
+    if (policy.mode !== 'only' || policy.presetId) return policy
+    const project = appStore.projects.find((item) => item.id === options.projectId())
+    const matchedPreset = SKILL_PRESETS
+      .map((preset) => resolveSkillPreset(
+        preset.id,
+        availableSkills.value,
+        project?.genre ?? '',
+        project?.skillPresetBindings
+      ))
+      .find((resolved) => (
+        resolved.policy.skillIds.length === policy.skillIds.length &&
+        resolved.policy.skillIds.every((id) => policy.skillIds.includes(id))
+      ))
+    return matchedPreset
+      ? { ...policy, presetId: matchedPreset.preset.id }
+      : policy
   }
 
   // === 错误 ===
@@ -395,10 +424,18 @@ export function useAssistant(options: UseAssistantOptions) {
     const loadedSkillIds = new Set(toolCalls
       .filter((tool) => tool.toolName === 'skill_load' && tool.status === 'ok')
       .map((tool) => String(tool.args.skill_id ?? '').trim()))
+    const failedSkillIds = new Set(toolCalls
+      .filter((tool) => tool.toolName === 'skill_load' && tool.status === 'error')
+      .map((tool) => String(tool.args.skill_id ?? '').trim()))
+    const turnFinished = events.some((event) => event.kind === 'done' || event.kind === 'error' || event.kind === 'canceled')
     skillReceipt = skillReceipt.map((item) => (
-      loadedSkillIds.has(item.id) || loadedSkillIds.has(item.name)
+      failedSkillIds.has(item.id) || failedSkillIds.has(item.name)
+        ? { ...item, state: 'failed', reason: '加载工具返回错误，本轮未注入该 Skill' }
+        : loadedSkillIds.has(item.id) || loadedSkillIds.has(item.name)
         ? { ...item, state: 'loaded' }
-        : item
+        : turnFinished && item.state === 'candidate'
+          ? { ...item, state: 'skipped', reason: '模型未加载该候选 Skill，本轮按项目上下文和默认规则完成' }
+          : item
     ))
     return { assistantMessage, reasoning, toolCalls, flowBlocks, stagedChangeIds, resumable, finalError, activityText, skillReceipt, skillMode }
   }
@@ -708,7 +745,7 @@ export function useAssistant(options: UseAssistantOptions) {
         userMessage,
         intentHint: sendOptions.intentHint,
         attachments: sendOptions.attachments,
-        skillPolicy: skillPolicy.value
+        skillPolicy: resolveRequestSkillPolicy()
       }))
     } catch (error) {
       lastError.value = formatAssistantError(error)
@@ -782,7 +819,7 @@ export function useAssistant(options: UseAssistantOptions) {
         userMessage: trimmedText,
         intentHint: sendOptions.intentHint,
         attachments: sendOptions.attachments,
-        skillPolicy: skillPolicy.value
+        skillPolicy: resolveRequestSkillPolicy()
       }))
       // 事件流已经在 handler 里做了乐观 turn 的替换 + 状态更新，
       // 这里只兜底：若乐观 turn 依然存在（没有任何事件推来），清理掉。

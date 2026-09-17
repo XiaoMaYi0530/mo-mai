@@ -1,7 +1,7 @@
 type CandidateSkill = {
   id: string
   name: string
-  manifest: { required?: boolean }
+  manifest: { required?: boolean; exclusiveGroup?: string; stages?: string[] }
 }
 
 export type PrioritizedSkillCandidate = {
@@ -38,7 +38,38 @@ export function selectSkillCandidates<T extends PrioritizedSkillCandidate>(
     pinned: entry.skill.manifest.required === true || isSkillExplicitlyMentioned(entry.skill, userPrompt)
   }))
   const eligible = decorated.filter(({ entry, pinned }) => entry.breakdown.total > 0 || pinned)
-  const pinned = eligible.filter((item) => item.pinned).map((item) => item.entry).sort(compare)
-  const optional = eligible.filter((item) => !item.pinned).map((item) => item.entry).sort(compare)
+  const claimedGroups = new Set<string>()
+  const deduplicateExclusiveGroups = (candidates: T[]): T[] => candidates.filter((entry) => {
+    const group = entry.skill.manifest.exclusiveGroup?.trim()
+    if (!group) return true
+    if (claimedGroups.has(group)) return false
+    claimedGroups.add(group)
+    return true
+  })
+  const pinned = deduplicateExclusiveGroups(
+    eligible.filter((item) => item.pinned).map((item) => item.entry).sort(compare)
+  )
+  const optional = deduplicateExclusiveGroups(
+    eligible.filter((item) => !item.pinned).map((item) => item.entry).sort(compare)
+  )
   return [...pinned, ...optional.slice(0, Math.max(0, maxSkills - pinned.length))]
+}
+
+/** 空阶段列表表示不限阶段；项目覆盖优先于 Skill 自带阶段。 */
+export function isSkillAllowedAtStage(
+  skill: CandidateSkill,
+  stageId: string,
+  stageOverride?: string[]
+): boolean {
+  if (!stageId) return true
+  const stages = stageOverride ?? skill.manifest.stages ?? []
+  return stages.length === 0 || stages.includes(stageId)
+}
+
+/** 自动模式按创作阶段控制注入数量，正文最克制，防止规则互相稀释。 */
+export function resolveAutoSkillLimit(stageId: string): number {
+  if (stageId === 'reference') return 1
+  if (stageId === 'premise' || stageId === 'setting' || stageId === 'draft') return 2
+  if (stageId === 'outline') return 3
+  return 3
 }

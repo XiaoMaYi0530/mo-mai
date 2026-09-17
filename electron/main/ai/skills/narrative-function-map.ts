@@ -5,7 +5,7 @@
 
 type NarrativeFunctionEntry = {
   keywords: string[]
-  /** 英文 skill id/description 子串模式，兼容 oh-story 系列 skill。 */
+  /** 英文 skill id/description 子串模式，兼容使用英文目录 ID 的 skill。 */
   skillPatterns: string[]
   /** 中文触发词，比对 skill 的 manifest.triggers，命中主工具箱（Distilled-Novel-Toolbox）。 */
   skillTriggers?: string[]

@@ -67,7 +67,7 @@ contextBridge.exposeInMainWorld('characterArc', {
   scanProjectSkills: (projectId: string) => ipcRenderer.invoke('characterarc:project-skills-scan', projectId),
   /** 从本地目录导入一组项目扩展 skills 到应用数据目录 */
   importProjectSkillsPackage: (projectId: string) => ipcRenderer.invoke('characterarc:project-skills-import', projectId),
-  /** 删除一个用户导入的全局 Skill；内置 Skill 不允许删除 */
+  /** 删除一个用户导入的全局 Skill 及其内容相同的历史项目副本；内置 Skill 不允许删除 */
   deleteGlobalSkill: (skillId: string) => ipcRenderer.invoke('characterarc:global-skill-delete', skillId),
   /** 读取当前项目可用 skills 的正文内容（供 AI 内部使用） */
   getProjectSkillsContext: (projectId: string) => ipcRenderer.invoke('characterarc:project-skills-context', projectId),

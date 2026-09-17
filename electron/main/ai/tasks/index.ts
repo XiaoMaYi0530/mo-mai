@@ -27,6 +27,8 @@ import referenceStyleChunk from './reference-style-chunk'
 import referenceStyleAnalysis from './reference-style-analysis'
 import referenceDeepAnalyze from './reference-deep-analyze'
 import styleFingerprintExtract from './style-fingerprint-extract'
+import storyConceptOptions from './story-concept-options'
+import referenceProjectBlueprint from './reference-project-blueprint'
 import storyDeepAudit from './story-deep-audit'
 import chapterRepair from './chapter-repair'
 import chapterSessionNote from './chapter-session-note'
@@ -87,6 +89,8 @@ register(referenceStyleChunk)
 register(referenceStyleAnalysis)
 register(referenceDeepAnalyze)
 register(styleFingerprintExtract)
+register(storyConceptOptions)
+register(referenceProjectBlueprint)
 register(storyDeepAudit)
 register(chapterRepair)
 register(chapterSessionNote)

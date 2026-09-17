@@ -1,14 +1,20 @@
 import type { AiAgentStreamHandlers, AiRunUsage, AppSettings, ToolCallTrace } from '../shared-types'
-import { runCodexCli } from '../codex-cli'
-import { stripReasoningMarkup } from '../reasoning'
+import { runCodexCli } from '../codex-cli.ts'
+import { stripReasoningMarkup } from '../reasoning.ts'
 import type { Tool, ToolContext } from './tools/types'
-import { resolveCodexHostToolName } from './codex-tool-name'
+import { resolveCodexHostToolName } from './codex-tool-name.ts'
 import {
   buildCodexRoundInstruction,
   hasReachedCodexPromptBudget,
   isCodexFinalizationRound,
   looksLikeCodexToolProtocol
-} from './codex-tool-loop-policy'
+} from './codex-tool-loop-policy.ts'
+import {
+  buildCodexContinuationPrompt,
+  mergeCodexSessionUsageSnapshot,
+  stableCodexValue,
+  type CodexSessionObservation
+} from './codex-session-state.ts'
 
 type CodexToolCall = {
   name: string
@@ -29,6 +35,7 @@ export type RunCodexToolAgentParams = {
   handlers: AiAgentStreamHandlers
   maxSteps: number
   disableTools?: boolean
+  requiredToolNames?: string[]
 }
 
 export type CodexToolAgentResult = {
@@ -43,30 +50,55 @@ const MAX_TOOL_RESULT_CHARS = 20_000
 const MAX_TOOL_DESCRIPTION_CHARS = 240
 const MAX_SCHEMA_DESCRIPTION_CHARS = 120
 
+const STAGED_SUCCESS_CLAIM_PATTERNS = [
+  /(?:已|已经|成功)(?:重新)?(?:生成|创建)[^。！？\n]{0,40}(?:待审阅|暂存(?:变更)?)/,
+  /(?:待审阅|暂存(?:变更)?)[^。！？\n]{0,40}(?:已|已经|成功)(?:生成|创建|完成)/,
+  /已(?:经)?暂存(?:章节|人物|世界观|大纲|组织|关系|设定|项目|知识|灵感|分卷)?(?:修改|变更|新增|删除)/
+]
+
+function claimsSuccessfulStagedChange(text: string): boolean {
+  return STAGED_SUCCESS_CLAIM_PATTERNS.some((pattern) => pattern.test(String(text ?? '')))
+}
+
+function extractChangeIds(text: string): string[] {
+  const ids: string[] = []
+  const pattern = /(?:change[_\s-]?id|暂存(?:变更)?编号)\s*[：:=]\s*([A-Za-z0-9_-]{6,})/gi
+  for (const match of String(text ?? '').matchAll(pattern)) {
+    if (match[1]) ids.push(match[1])
+  }
+  return [...new Set(ids)]
+}
+
+/**
+ * 暂存成功属于宿主事实，不能由模型根据历史对话自行推断。
+ * 返回 null 表示回复与本轮工具记录一致，否则返回供模型修正的原因。
+ */
+export function validateStagedChangeClaim(
+  finalText: string,
+  observations: CodexSessionObservation[]
+): string | null {
+  if (!claimsSuccessfulStagedChange(finalText)) return null
+
+  const successfulStages = observations.filter((item) => !item.isError && item.tool.startsWith('stage_'))
+  if (successfulStages.length === 0) {
+    return '本轮没有成功执行任何 stage_ 宿主工具，因此不能声称已生成待审阅暂存变更，也不能复用历史对话中的 change_id。'
+  }
+
+  const claimedIds = extractChangeIds(finalText)
+  if (claimedIds.length === 0) return null
+  const currentIds = new Set(successfulStages.flatMap((item) => extractChangeIds(item.content)))
+  const staleIds = claimedIds.filter((id) => !currentIds.has(id))
+  return staleIds.length > 0
+    ? `回复中的 change_id（${staleIds.join('、')}）不是本轮 stage_ 工具返回的编号，禁止引用为本轮新暂存。`
+    : null
+}
+
+function stagedClaimBlockedText(): string {
+  return '本轮未生成新的暂存变更；系统已阻止复用历史暂存编号。请重试本次修改请求。'
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-  const obj = value as Record<string, unknown>
-  const keys = Object.keys(obj).sort()
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`).join(',')}}`
-}
-
-function mergeUsage(a: AiRunUsage | undefined, b: AiRunUsage | undefined): AiRunUsage | undefined {
-  if (!a) return b
-  if (!b) return a
-  const sum = (x?: number, y?: number): number | undefined =>
-    x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0)
-  return {
-    promptTokens: sum(a.promptTokens, b.promptTokens),
-    completionTokens: sum(a.completionTokens, b.completionTokens),
-    totalTokens: sum(a.totalTokens, b.totalTokens),
-    reasoningTokens: sum(a.reasoningTokens, b.reasoningTokens),
-    cachedInputTokens: sum(a.cachedInputTokens, b.cachedInputTokens)
-  }
 }
 
 /** 从混合文本中提取彼此相邻的顶层 JSON 对象，正确跳过字符串里的花括号。 */
@@ -174,8 +206,8 @@ export function buildToolProtocolPrompt(tools: Tool[]): string {
     inputSchema: compactToolSchema(tool.definition.inputSchema)
   }))
   return [
-    '【CharacterArc 宿主工具协议】',
-    '你可以通过下面的 JSON 协议请求 CharacterArc 执行进程内工具。这里的工具由应用宿主执行，不是 Codex CLI 的 shell 工具；即使本地 shell 工具被禁用，也必须按任务需要调用这些宿主工具。',
+    '【墨脉宿主工具协议】',
+    '你可以通过下面的 JSON 协议请求墨脉执行进程内工具。这里的工具由应用宿主执行，不是 Codex CLI 的 shell 工具；即使本地 shell 工具被禁用，也必须按任务需要调用这些宿主工具。',
     '每次回复必须只输出一个 JSON 对象，不能使用 Markdown 代码块，也不能在 JSON 前后添加说明：',
     '{"toolCalls":[{"name":"工具名","arguments":{"参数":"值"}}],"finalText":""}',
     '规则：',
@@ -183,29 +215,10 @@ export function buildToolProtocolPrompt(tools: Tool[]): string {
     '2. 已经得到足够结果时，toolCalls 传空数组，把面向用户的中文回复写入 finalText。',
     '3. 修改项目数据必须调用对应的 stage_* 工具进入暂存区，绝不能只在 finalText 里描述拟修改内容，也不要声称工具不可用。',
     '4. 只能使用目录里列出的工具和参数；不得虚构工具名。工具名是普通 JSON 字符串，下划线不要写成 Markdown 转义。',
+    '5. 只有本轮成功执行 stage_* 工具后，才能声称已生成暂存变更；finalText 中的 change_id 必须来自本轮工具结果，禁止复用历史编号。',
     '',
     '【可用宿主工具目录】',
     JSON.stringify(catalog)
-  ].join('\n')
-}
-
-function buildFollowupPrompt(
-  originalUserPrompt: string,
-  observations: Array<{ tool: string; arguments: Record<string, unknown>; content: string; isError: boolean }>
-): string {
-  const results = observations.map((item, index) => [
-    `### 结果 ${index + 1}：${item.tool}${item.isError ? '（失败）' : ''}`,
-    `参数：${stableStringify(item.arguments)}`,
-    item.content.slice(0, MAX_TOOL_RESULT_CHARS)
-  ].join('\n')).join('\n\n')
-  return [
-    '【原始用户请求】',
-    originalUserPrompt,
-    '',
-    '【本轮已执行的宿主工具结果】',
-    results,
-    '',
-    '请根据结果继续处理。若仍需读取或暂存，继续输出 toolCalls；若任务已完成，输出空 toolCalls 和最终回复。'
   ].join('\n')
 }
 
@@ -230,7 +243,7 @@ async function runTextOnly(params: RunCodexToolAgentParams): Promise<CodexToolAg
 
 /**
  * Codex CLI 本身不能直接持有 Electron 进程内函数，因此用受限 JSON 协议桥接：
- * Codex 只选择工具和参数，实际读取与暂存仍由 CharacterArc 宿主执行。
+ * Codex 只选择工具和参数，实际读取与暂存仍由墨脉宿主执行。
  */
 export async function runCodexToolAgent(
   params: RunCodexToolAgentParams
@@ -240,12 +253,7 @@ export async function runCodexToolAgent(
   const toolsByName = new Map(params.tools.map((tool) => [tool.definition.name, tool]))
   const availableToolNames = new Set(toolsByName.keys())
   const traces: ToolCallTrace[] = []
-  const observations: Array<{
-    tool: string
-    arguments: Record<string, unknown>
-    content: string
-    isError: boolean
-  }> = []
+  const observations: CodexSessionObservation[] = []
   const seenResults = new Map<string, { content: string; isError: boolean }>()
   let usage: AiRunUsage | undefined
   let codexSessionId: string | undefined
@@ -254,7 +262,11 @@ export async function runCodexToolAgent(
 
   for (let step = 1; step <= params.maxSteps; step += 1) {
     params.ctx.signal.throwIfAborted()
-    const tokenBudgetReached = hasReachedCodexPromptBudget(usage?.promptTokens)
+    const requiredToolsSatisfied = (params.requiredToolNames ?? []).every((name) => (
+      traces.some((trace) => trace.tool === name && trace.status === 'ok')
+    ))
+    // 必须真实落库的任务在首次保存前不能被软预算直接赶进“禁止工具”的收尾轮。
+    const tokenBudgetReached = hasReachedCodexPromptBudget(usage?.promptTokens) && requiredToolsSatisfied
     const forceFinalize = isCodexFinalizationRound(step, params.maxSteps) || tokenBudgetReached
     const roundInstruction = buildCodexRoundInstruction(
       step,
@@ -272,7 +284,7 @@ export async function runCodexToolAgent(
     const prompt = [
       step === 1
         ? params.userPrompt
-        : buildFollowupPrompt(params.userPrompt, followupObservations),
+        : buildCodexContinuationPrompt(followupObservations, MAX_TOOL_RESULT_CHARS),
       '',
       roundInstruction
     ].join('\n')
@@ -294,7 +306,7 @@ export async function runCodexToolAgent(
       }
     )
     codexSessionId = result.sessionId ?? codexSessionId
-    usage = mergeUsage(usage, result.usage)
+    usage = mergeCodexSessionUsageSnapshot(usage, result.usage)
     const envelope = parseCodexToolEnvelope(result.text)
 
     // 向下兼容普通文本回复。协议解析失败时仍可聊天，但不会伪造工具执行结果。
@@ -323,6 +335,35 @@ export async function runCodexToolAgent(
         })
         continue
       }
+      if (!requiredToolsSatisfied) {
+        if (forceFinalize) {
+          return { finalText, toolCalls: traces, iterations: step, usage }
+        }
+        observations.push({
+          tool: 'required_tool_validation',
+          arguments: {},
+          content: `任务尚未成功调用必需工具：${(params.requiredToolNames ?? []).join('、')}。请按宿主工具协议立即调用，不要返回普通正文。`,
+          isError: true
+        })
+        params.handlers.onAgentStatus('尚未保存任务结果，正在要求模型执行落库...', step, params.maxSteps)
+        continue
+      }
+      const stagedClaimError = validateStagedChangeClaim(finalText, observations)
+      if (stagedClaimError) {
+        if (forceFinalize) {
+          const safeFinalText = stagedClaimBlockedText()
+          params.handlers.onTextDelta(safeFinalText)
+          return { finalText: safeFinalText, toolCalls: traces, iterations: step, usage }
+        }
+        params.handlers.onAgentStatus('检测到暂存状态与本轮工具记录不一致，正在自动修正...', step, params.maxSteps)
+        observations.push({
+          tool: 'staged_change_validation',
+          arguments: {},
+          content: `${stagedClaimError}\n如果用户要求修改，请立即调用合适的 stage_* 工具；否则请如实说明本轮没有生成暂存。`,
+          isError: true
+        })
+        continue
+      }
       if (finalText) params.handlers.onTextDelta(finalText)
       return { finalText, toolCalls: traces, iterations: step, usage }
     }
@@ -330,6 +371,35 @@ export async function runCodexToolAgent(
     if (envelope.toolCalls.length === 0) {
       if (!envelope.finalText) {
         throw new Error('Codex CLI 返回了空的工具协议响应。')
+      }
+      if (!requiredToolsSatisfied) {
+        if (forceFinalize) {
+          return { finalText: envelope.finalText, toolCalls: traces, iterations: step, usage }
+        }
+        observations.push({
+          tool: 'required_tool_validation',
+          arguments: {},
+          content: `任务尚未成功调用必需工具：${(params.requiredToolNames ?? []).join('、')}。请立即调用，不要只在 finalText 中描述结果。`,
+          isError: true
+        })
+        params.handlers.onAgentStatus('尚未保存任务结果，正在要求模型执行落库...', step, params.maxSteps)
+        continue
+      }
+      const stagedClaimError = validateStagedChangeClaim(envelope.finalText, observations)
+      if (stagedClaimError) {
+        if (forceFinalize) {
+          const safeFinalText = stagedClaimBlockedText()
+          params.handlers.onTextDelta(safeFinalText)
+          return { finalText: safeFinalText, toolCalls: traces, iterations: step, usage }
+        }
+        params.handlers.onAgentStatus('检测到暂存状态与本轮工具记录不一致，正在自动修正...', step, params.maxSteps)
+        observations.push({
+          tool: 'staged_change_validation',
+          arguments: {},
+          content: `${stagedClaimError}\n如果用户要求修改，请立即调用合适的 stage_* 工具；否则请如实说明本轮没有生成暂存。`,
+          isError: true
+        })
+        continue
       }
       params.handlers.onTextDelta(envelope.finalText)
       return {
@@ -344,10 +414,11 @@ export async function runCodexToolAgent(
     // 避免“最后一轮又读一页，随后直接报错”。
     if (forceFinalize) {
       const stagedCount = traces.filter((trace) => trace.status === 'ok' && trace.tool.startsWith('stage_')).length
-      const finalText = envelope.finalText
+      let finalText = envelope.finalText
         || (stagedCount > 0
           ? `已生成 ${stagedCount} 条待审阅变更，请在右侧暂存区逐条确认。`
           : '已读取相关资料，但本轮尚未完成最终处理。请点击“继续”，我会基于已有结果继续，不重复遍历资料。')
+      if (validateStagedChangeClaim(finalText, observations)) finalText = stagedClaimBlockedText()
       params.handlers.onTextDelta(finalText)
       return {
         finalText,
@@ -365,7 +436,7 @@ export async function runCodexToolAgent(
       const startedAt = Date.now()
       params.handlers.onToolUseStart(toolUseId, reportedToolName, call.arguments)
 
-      const fingerprint = `${reportedToolName}:${stableStringify(call.arguments)}`
+      const fingerprint = `${reportedToolName}:${stableCodexValue(call.arguments)}`
       const cached = seenResults.get(fingerprint)
       let content = ''
       let isError = false
@@ -411,6 +482,17 @@ export async function runCodexToolAgent(
 
     // 兼容少数模型在同一协议响应中同时给出成功工具调用和最终说明。
     if (envelope.finalText && !stepHasError) {
+      const stagedClaimError = validateStagedChangeClaim(envelope.finalText, observations)
+      if (stagedClaimError) {
+        params.handlers.onAgentStatus('检测到暂存编号与本轮工具结果不一致，正在自动修正...', step, params.maxSteps)
+        observations.push({
+          tool: 'staged_change_validation',
+          arguments: {},
+          content: `${stagedClaimError}\n请只引用本轮 stage_* 工具结果中的 change_id，并重新输出最终回复。`,
+          isError: true
+        })
+        continue
+      }
       params.handlers.onTextDelta(envelope.finalText)
       return {
         finalText: envelope.finalText,

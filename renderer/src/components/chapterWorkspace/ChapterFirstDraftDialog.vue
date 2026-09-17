@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { NButton, NModal, NTag } from 'naive-ui'
 import type { ChapterAuditPayload } from './useChapterFirstDraft'
+import ChapterDraftStreamView from './ChapterDraftStreamView.vue'
 
 const props = defineProps<{
   show: boolean
@@ -86,21 +87,12 @@ const auditSummary = computed(() => {
       <p class="copy">
         {{ progressText || '已停止或完成本次 AI 初稿生成。' }}
       </p>
-      <div class="preview arc-scrollbar">
-        <div v-if="previewTitle" class="preview-head">{{ previewTitle }}</div>
-        <div v-if="reasoningContent" class="reasoning-block">
-          <div class="reasoning-head">
-            <span class="reasoning-dot" />
-            模型思考过程
-          </div>
-          <pre class="reasoning-body">{{ reasoningContent }}</pre>
-        </div>
-        <pre v-if="previewContent">{{ previewContent }}</pre>
-        <div v-else-if="!reasoningContent" class="preview-placeholder">
-          <span class="placeholder-text">{{ executionLabel || 'AI 正在准备本章初稿内容' }}</span>
-          <span class="blink-cursor" />
-        </div>
-      </div>
+      <ChapterDraftStreamView
+        :output-title="previewTitle || '实时生成内容'"
+        :output-content="previewContent"
+        :reasoning-content="reasoningContent"
+        :placeholder="executionLabel || 'AI 正在准备本章初稿内容'"
+      />
 
       <div v-if="isAuditing" class="audit-loading">
         <span class="dot-pulse" />

@@ -4,6 +4,7 @@ type RunningTask<T = unknown> = {
   fingerprint: string
   controller: AbortController
   promise: Promise<T>
+  launch: () => void
 }
 
 /**
@@ -11,6 +12,19 @@ type RunningTask<T = unknown> = {
  */
 export class BackgroundTaskCoordinator {
   private readonly running = new Map<string, RunningTask>()
+  private readonly queue: Array<() => void> = []
+  private activeCount = 0
+  private readonly maxConcurrent: number
+
+  constructor(maxConcurrent = Number.POSITIVE_INFINITY) {
+    this.maxConcurrent = Math.max(1, maxConcurrent)
+  }
+
+  private drain(): void {
+    while (this.activeCount < this.maxConcurrent && this.queue.length > 0) {
+      this.queue.shift()?.()
+    }
+  }
 
   runLatest<T>(
     key: string,
@@ -25,24 +39,55 @@ export class BackgroundTaskCoordinator {
     existing?.controller.abort(new Error(`Background task superseded: ${key}`))
 
     const controller = new AbortController()
-    const record = {
+    let resolvePromise!: (value: T | PromiseLike<T>) => void
+    let rejectPromise!: (reason?: unknown) => void
+    const record: RunningTask<T> = {
       fingerprint,
       controller,
-      promise: Promise.resolve(undefined) as Promise<T>
+      promise: new Promise<T>((resolve, reject) => {
+        resolvePromise = resolve
+        rejectPromise = reject
+      }),
+      launch: () => {}
     }
-    record.promise = Promise.resolve()
-      .then(() => runner(controller.signal))
-      .finally(() => {
-        if (this.running.get(key) === record) {
-          this.running.delete(key)
-        }
-      })
+    record.launch = () => {
+      if (controller.signal.aborted) {
+        rejectPromise(controller.signal.reason)
+        if (this.running.get(key) === record) this.running.delete(key)
+        this.drain()
+        return
+      }
+      this.activeCount += 1
+      const finish = () => {
+        this.activeCount = Math.max(0, this.activeCount - 1)
+        if (this.running.get(key) === record) this.running.delete(key)
+        this.drain()
+      }
+      Promise.resolve()
+        .then(() => runner(controller.signal))
+        .then(
+          (value) => {
+            finish()
+            resolvePromise(value)
+          },
+          (error) => {
+            finish()
+            rejectPromise(error)
+          }
+        )
+    }
     this.running.set(key, record)
+    this.queue.push(record.launch)
+    this.drain()
     return record.promise
   }
 
   isRunning(key: string): boolean {
     return this.running.has(key)
+  }
+
+  get queuedCount(): number {
+    return Math.max(0, this.running.size - this.activeCount)
   }
 
   cancel(key: string): boolean {

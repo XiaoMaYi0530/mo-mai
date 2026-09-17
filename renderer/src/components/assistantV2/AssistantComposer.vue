@@ -1,9 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { NButton, NCheckbox, NPopover, NRadio, NRadioGroup } from 'naive-ui'
+import { NButton, NPopover } from 'naive-ui'
 import { ChevronDown, ClipboardList, LoaderCircle, Sparkles, Square, Undo2, X } from 'lucide-vue-next'
-import type { AssistantTurnPreview, SkillUseMode, SkillUsePolicy } from '@shared/assistant-runtime'
+import type { AssistantTurnPreview, SkillUsePolicy } from '@shared/assistant-runtime'
+import {
+  resolveSkillPreset,
+  SKILL_PRESETS,
+  type SkillPresetBindings
+} from '@shared/skill-presets'
 import type { ProjectSkillItem } from '@/types/app'
+import SkillPolicyPicker from './SkillPolicyPicker.vue'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -17,9 +23,12 @@ const props = withDefaults(defineProps<{
   availableSkills?: ProjectSkillItem[]
   turnPreview?: AssistantTurnPreview | null
   isPreviewing?: boolean
+  projectGenre?: string
+  skillPresetBindings?: SkillPresetBindings
 }>(), {
   skillPolicy: () => ({ mode: 'auto', skillIds: [] }),
-  availableSkills: () => []
+  availableSkills: () => [],
+  skillPresetBindings: () => ({})
 })
 
 const emit = defineEmits<{
@@ -35,12 +44,30 @@ const emit = defineEmits<{
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 let lastEscapeAt = 0
 
+const resolvedSkillPresets = computed(() => SKILL_PRESETS.map((preset) =>
+  resolveSkillPreset(preset.id, props.availableSkills, props.projectGenre, props.skillPresetBindings)
+))
+const activeResolvedSkillPreset = computed(() => {
+  if (props.skillPolicy.mode !== 'only') return null
+  const identified = props.skillPolicy.presetId
+    ? resolvedSkillPresets.value.find((item) => item.preset.id === props.skillPolicy.presetId)
+    : null
+  return identified ?? resolvedSkillPresets.value.find((item) => (
+    item.policy.skillIds.length > 0
+    && item.policy.skillIds.length === props.skillPolicy.skillIds.length
+    && item.policy.skillIds.every((id) => props.skillPolicy.skillIds.includes(id))
+  )) ?? null
+})
 const skillPolicyLabel = computed(() => {
   if (props.skillPolicy.mode === 'off') return '技能：不使用'
-  if (props.skillPolicy.mode === 'only') return `技能：仅使用（${props.skillPolicy.skillIds.length}）`
-  return '技能：自动'
+  if (props.skillPolicy.mode === 'only') {
+    if (activeResolvedSkillPreset.value) {
+      return `技能：${activeResolvedSkillPreset.value.preset.name}（${props.skillPolicy.skillIds.length}）`
+    }
+    return `技能：手动选择（${props.skillPolicy.skillIds.length}）`
+  }
+  return '技能：自动匹配'
 })
-
 const sendDisabled = computed(() => (
   props.isEditing
   || !props.modelValue.trim()
@@ -56,21 +83,9 @@ function contextStateLabel(state: AssistantTurnPreview['contextItems'][number]['
 function skillStateLabel(state: AssistantTurnPreview['skills'][number]['state']): string {
   if (state === 'loaded') return '已读取'
   if (state === 'injected') return '已注入'
+  if (state === 'skipped') return '已跳过'
+  if (state === 'failed') return '加载失败'
   return '候选'
-}
-
-function setSkillMode(mode: SkillUseMode): void {
-  emit('update:skill-policy', { ...props.skillPolicy, mode })
-}
-
-function toggleSkill(skillId: string, checked: boolean): void {
-  const selected = props.skillPolicy.skillIds
-  emit('update:skill-policy', {
-    mode: 'only',
-    skillIds: checked
-      ? [...new Set([...selected, skillId])]
-      : selected.filter((id) => id !== skillId)
-  })
 }
 
 function handleInput(event: Event) {
@@ -114,6 +129,7 @@ watch(
     autosize(textareaRef.value)
   }
 )
+
 </script>
 
 <template>
@@ -138,7 +154,7 @@ watch(
               <LoaderCircle v-if="props.isPreviewing" :size="12" class="spin" />
               <ClipboardList v-else :size="12" />
               <template v-if="props.turnPreview">
-                {{ props.turnPreview.intentLabel }} · {{ props.turnPreview.contextItems.length }} 类资料 · {{ props.turnPreview.skills.length }} 个 Skill
+                {{ props.turnPreview.intentLabel }} · {{ props.turnPreview.contextItems.length }} 类资料 · {{ props.turnPreview.skills.filter(skill => skill.state !== 'skipped').length }} 个 Skill
               </template>
               <template v-else>{{ props.isPreviewing ? '正在规划本轮…' : '查看本轮会怎样执行' }}</template>
             </button>
@@ -168,8 +184,8 @@ watch(
               <div class="preview-section">
                 <strong>Skill</strong>
                 <div v-if="props.turnPreview.skills.length" class="preview-chips">
-                  <span v-for="skill in props.turnPreview.skills" :key="skill.id">
-                    {{ skill.name }} · {{ skillStateLabel(skill.state) }}
+                  <span v-for="skill in props.turnPreview.skills" :key="skill.id" :class="skill.state" :title="skill.reason">
+                    {{ skill.name }} · {{ skillStateLabel(skill.state) }}<template v-if="skill.reason"><br><small>{{ skill.reason }}</small></template>
                   </span>
                 </div>
                 <small v-else>本轮不会注入 Skill。</small>
@@ -215,28 +231,15 @@ watch(
             </template>
             <div class="skill-policy-popover">
               <strong>本对话 Skill 规则</strong>
-              <NRadioGroup :value="props.skillPolicy.mode" @update:value="setSkillMode">
-                <div class="skill-mode-list">
-                  <NRadio value="auto">自动匹配</NRadio>
-                  <NRadio value="only">仅使用指定</NRadio>
-                  <NRadio value="off">不使用</NRadio>
-                </div>
-              </NRadioGroup>
-              <div v-if="props.skillPolicy.mode === 'only'" class="skill-only-list">
-                <span v-if="props.availableSkills.length === 0" class="skill-empty">当前项目没有已启用的可用 Skill。</span>
-                <template v-else>
-                  <NCheckbox
-                    v-for="skill in props.availableSkills"
-                    :key="skill.id"
-                    :checked="props.skillPolicy.skillIds.includes(skill.id)"
-                    @update:checked="toggleSkill(skill.id, $event)"
-                  >{{ skill.name }}</NCheckbox>
-                </template>
-              </div>
-              <small v-if="props.skillPolicy.mode === 'only' && props.skillPolicy.skillIds.length === 0" class="skill-warning">
-                请至少选择一个 Skill 后再发送。
-              </small>
-              <small v-else class="skill-policy-note">该选择保留在当前对话中，不会修改项目默认规则。</small>
+              <SkillPolicyPicker
+                :model-value="props.skillPolicy"
+                :available-skills="props.availableSkills"
+                :project-genre="props.projectGenre"
+                :skill-preset-bindings="props.skillPresetBindings"
+                scope-note="仅影响当前对话。"
+                @update:model-value="emit('update:skill-policy', $event)"
+              />
+              <small class="skill-policy-note">该选择保留在当前对话中，不会修改项目默认规则。</small>
             </div>
           </NPopover>
           <NButton
@@ -378,14 +381,20 @@ watch(
 }
 .preview-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .preview-chips span {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
   padding: 3px 7px;
   border: 1px solid var(--arc-border);
   border-radius: 999px;
   color: var(--arc-text-secondary);
   font-size: 10.5px;
 }
+.preview-chips span small { color: inherit; font-size: 9.5px; line-height: 1.35; }
 .preview-chips span.compressed,
-.preview-chips span.omitted { color: #b45309; border-color: rgba(180, 83, 9, 0.25); }
+.preview-chips span.omitted,
+.preview-chips span.skipped { color: #b45309; border-color: rgba(180, 83, 9, 0.25); }
+.preview-chips span.failed { color: var(--arc-danger, #d03050); border-color: color-mix(in srgb, var(--arc-danger, #d03050) 30%, transparent); }
 .preview-warnings {
   display: grid;
   gap: 4px;
@@ -500,7 +509,7 @@ textarea::placeholder {
   opacity: 0.55;
 }
 .skill-policy-popover {
-  width: min(320px, calc(100vw - 40px));
+  width: min(390px, calc(100vw - 40px));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -510,27 +519,9 @@ textarea::placeholder {
   color: var(--arc-text-primary);
   font-size: 13px;
 }
-.skill-mode-list,
-.skill-only-list {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-.skill-only-list {
-  max-height: 210px;
-  padding: 9px 10px;
-  overflow-y: auto;
-  border: 1px solid var(--arc-border);
-  border-radius: 8px;
-}
-.skill-empty,
-.skill-policy-note,
-.skill-warning {
+.skill-policy-note {
   color: var(--arc-text-hint);
   font-size: 11px;
   line-height: 1.5;
-}
-.skill-warning {
-  color: var(--arc-danger, #d03050);
 }
 </style>

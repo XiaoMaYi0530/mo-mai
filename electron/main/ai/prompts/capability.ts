@@ -40,6 +40,8 @@ const TASK_DEFAULT_CAPABILITIES: Record<AiTaskName, PromptCapabilityId[]> = {
   'ranking-idea-combinations': ['settings', 'analysis', 'writing-style'],
   'reference-deep-analyze': ['settings', 'analysis', 'writing-style', 'project-skills', 'import-export'],
   'style-fingerprint-extract': ['settings', 'analysis', 'writing-style', 'project-skills'],
+  'story-concept-options': ['settings', 'inspiration', 'analysis', 'worldview', 'outline', 'project-skills'],
+  'reference-project-blueprint': ['settings', 'analysis', 'worldview', 'outline', 'writing-style'],
   'workflow-documents': ['settings', 'workflow', 'import-export'],
   'assistant-intent': ['settings', 'chapters', 'analysis', 'versioning'],
   'assistant-action-proposal': ['settings', 'chapters', 'worldview', 'characters', 'relations', 'outline', 'inspiration', 'writing-style', 'project-skills', 'versioning'],
@@ -108,7 +110,7 @@ export function buildCapabilityContext(task: AiTaskName, capabilities: PromptCap
   })
   return {
     system: [
-      '你正在 CharacterArc 当前已实现的功能范围内工作。',
+      '你正在墨脉当前已实现的功能范围内工作。',
       `本次任务类型：${task}。`,
       '本次任务相关的已实现功能模块：',
       ...capabilityLines

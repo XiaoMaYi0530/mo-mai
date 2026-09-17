@@ -46,7 +46,8 @@ import {
 } from './chapter-processing-store'
 import { testCodexCliConnection } from '../codex-cli'
 
-const postGenerationTasks = new BackgroundTaskCoordinator()
+// 状态抽取和向量索引都可能调用模型；限制并发，避免一次定稿多章时互相争抢额度。
+const postGenerationTasks = new BackgroundTaskCoordinator(2)
 
 type PostGenerationPipelineResult = {
   issues: ChapterPostGenerationIssuesPayload['issues']
@@ -90,18 +91,26 @@ export async function runAiTask(
   // 白名单内的任务直接尝试走 agent loop，不预判 provider 能力。
   // 如果模型不支持 tool_use，运行时会抛错，在 catch 中降级或提示用户。
   const settingsForRouting = normalizeSettings(task.settings)
-  // Codex CLI 自己运行在独立进程中，无法直接执行 CharacterArc 的进程内 tools；
-  // 此模式仍使用相同的完整任务 Prompt，并走单次/流式文本链路。
+  // Codex CLI 通过 runAgent 内的宿主工具桥接执行进程内 tools。拆书类任务必须走 agent，
+  // 否则模型只会“声称已落库”，实际不会产生任何知识文档。
+  const codexToolBridgeTasks: ReadonlySet<AiTaskPayload['task']> = new Set([
+    'reference-deep-analyze',
+    'style-fingerprint-extract'
+  ])
   const usesAgentRoute = AGENT_TASK_WHITELIST.has(task.task)
-    && !isCodexCliProvider(settingsForRouting.provider)
+    && (!isCodexCliProvider(settingsForRouting.provider) || codexToolBridgeTasks.has(task.task))
   if (usesAgentRoute) {
     await enrichTaskContextForGeneration(task, settingsForRouting)
     try {
       return await runAgentTask(task, knowledgeContext)
     } catch (error) {
       if (isToolUseNotSupportedError(error)) {
-        if (task.task === 'reference-deep-analyze') {
-          throw new Error('深度拆书需要模型支持 tool_use（工具调用）。当前模型不支持此功能，请切换到支持工具调用的模型后重试。')
+        if (task.task === 'reference-deep-analyze' || task.task === 'style-fingerprint-extract') {
+          throw new Error(
+            task.task === 'style-fingerprint-extract'
+              ? '风格指纹提取需要模型支持工具调用，才能把结果保存到知识库。当前模型不支持，请切换模型后重试。'
+              : '深度拆书需要模型支持工具调用。当前模型不支持此功能，请切换到支持工具调用的模型后重试。'
+          )
         }
         // 其余白名单任务：降级到单次调用路径
       } else {

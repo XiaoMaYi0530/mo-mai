@@ -12,7 +12,7 @@
  */
 
 import type { AiTaskName, AiTaskPayload, AppSettings } from '../shared-types'
-import type { AssistantSession, AssistantTurnPreview, ContextProviderId, SurfaceDefinition, TurnSendRequest } from '@shared/assistant-runtime'
+import type { AssistantSession, AssistantTurnPreview, ContextProviderId, SkillExecutionReceiptItem, SurfaceDefinition, TurnSendRequest } from '@shared/assistant-runtime'
 import type { Tool } from '../agent/tools/types'
 import { buildSkillIndex } from '../agent/system-prompt'
 import { createChapterTools } from '../agent/tools/chapter-tools'
@@ -20,7 +20,7 @@ import { createProjectDataTools } from '../agent/tools/project-data-tools'
 import { createKnowledgeTools } from '../agent/tools/knowledge-tools'
 import { createSkillTools } from '../agent/tools/skill-tools'
 import { getAllSkills, getSkillById, resolveSkillEnabledOverrides, resolveTaskSkills } from '../skills'
-import type { SkillDefinition, SkillStageId } from '../skills'
+import type { SkillDefinition } from '../skills'
 import { normalizeSettings, validateSettings } from '../settings'
 import { assembleContextBlock, contextBuilder, estimateTokens } from './context-builder'
 import { filterToolsBySurface, isToolAllowed, resolveAllowedMatchers } from './permission'
@@ -39,6 +39,8 @@ import { saveRuntimeKnowledgeDocument } from './knowledge-writer'
 import { createEvidenceLedger, wrapToolsWithRuntimeBudget } from './evidence-ledger'
 import { createRuntimePlan, type AssistantRuntimePlan } from './planner'
 import { selectToolsForTurn } from './tool-selection-policy'
+import { buildSkillContentExcerpt } from '../skills/content-slice'
+import { resolveSkillStage } from './skill-stage'
 
 /** 输出预算包含 reasoning token，保留足够空间给回答/工具规划，不随 prompt 无限放大。 */
 const DEFAULT_MAX_OUTPUT_TOKENS = 32000
@@ -72,7 +74,8 @@ const CONTEXT_LABELS: Partial<Record<ContextProviderId, string>> = {
   inspiration: '灵感资料',
   knowledge: '知识库',
   'workflow-documents': '创作记忆',
-  'skill-index': 'Skill 索引'
+  'skill-index': 'Skill 索引',
+  'style-fingerprint': '项目风格指纹'
 }
 
 function estimateModelCalls(plan: AssistantRuntimePlan): string {
@@ -107,7 +110,20 @@ export function createExecutionPlanner(
     validateSettings(settings)
 
     // 1. Planner：先决定本轮是轻量对话、审计、修正还是分批任务。
-    const runtimePlan = createRuntimePlan({ surface, request })
+    const baseRuntimePlan = createRuntimePlan({ surface, request })
+    const projectView = getProjectView(snapshot, session.projectId)
+    const effectiveSkillPolicy = request.skillPolicy ?? projectView?.project.skillPolicy
+    const skillStageId = resolveSkillStage(
+      baseRuntimePlan,
+      surface,
+      request.userMessage,
+      effectiveSkillPolicy?.mode === 'only' ? effectiveSkillPolicy.presetId : undefined,
+      request.previousSkillStageId
+    )
+    const runtimePlan: AssistantRuntimePlan = {
+      ...baseRuntimePlan,
+      skillStageId
+    }
     const evidenceLedger = createEvidenceLedger()
     const activeScopeRef = request.scopeRef ?? session.scopeRef
 
@@ -134,11 +150,11 @@ export function createExecutionPlanner(
       runtimePlan,
       activeScopeRef
     })
-    const { projectId, skills: selectedSkills, policy: skillPolicy } = await resolveTaskSkills(skillTask)
+    const { projectId, skills: selectedSkills, policy: skillPolicy, decisions: skillDecisions } = await resolveTaskSkills(skillTask)
     const matchedSkillDefs = selectedSkills
       .map((sel) => getSkillById(sel.id, projectId || undefined))
       .filter((skill): skill is SkillDefinition => Boolean(skill))
-    const skillPromptBlock = buildV2SkillPromptBlock(matchedSkillDefs, surface, skillPolicy.mode === 'only')
+    const skillPromptBlock = buildV2SkillPromptBlock(matchedSkillDefs, surface, skillPolicy.mode === 'only', skillTask)
     const allowedSkillIds = new Set(selectedSkills.map((skill) => skill.id))
     const skillEnabledOverrides = resolveSkillEnabledOverrides(skillTask, projectId)
 
@@ -183,6 +199,7 @@ export function createExecutionPlanner(
       resolveSkillEnabled: (skill) => skillEnabledOverrides?.get(skill.id) ?? skill.enabled,
       // 执行计划是唯一授权来源：不在本轮 selected 中的 Skill 无法再被模型按 id 绕过加载。
       allowSkillUse: (skill) => allowedSkillIds.has(skill.id),
+      resolveSkillLoadContent: (skill) => buildSkillContentExcerpt(skill, skillTask),
       // 只允许 builtin skill 跑脚本，跟旧路径一致
       allowScriptExecution: (skill) => skill.scope === 'builtin'
     })
@@ -193,7 +210,8 @@ export function createExecutionPlanner(
         turnId: ctx.turnId,
         projectId: ctx.projectId,
         stagedStore: stagedChangesStore,
-        currentChapterId
+        currentChapterId,
+        originalUserPrompt: request.userMessage
       })
       const stageChapterCreate = makeStageChapterCreateTool({
         sessionId: ctx.sessionId,
@@ -247,7 +265,8 @@ export function createExecutionPlanner(
       const turnTools = selectToolsForTurn(surfaceTools, {
         surface,
         intent: runtimePlan.intent,
-        userMessage: request.userMessage
+        userMessage: request.userMessage,
+        skillStageId: runtimePlan.skillStageId
       })
       return wrapToolsWithRuntimeBudget(
         turnTools,
@@ -262,13 +281,22 @@ export function createExecutionPlanner(
       Math.max(estimateTokens(systemPrompt) + 6000, 16000)
     )
 
+    const selectedDecisionById = new Map(skillDecisions.filter((item) => item.selected).map((item) => [item.id, item]))
+    const skippedSkillItems = skillDecisions.filter((item) => !item.selected).slice(0, 4).map((item) => ({
+      id: item.id,
+      name: item.name,
+      state: 'skipped' as const,
+      reason: item.reason
+    }))
+    const selectedSkillItems: SkillExecutionReceiptItem[] = matchedSkillDefs.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      state: (skillPolicy.mode === 'only' || skill.manifest.required) ? 'injected' : 'candidate',
+      reason: selectedDecisionById.get(skill.id)?.reason
+    }))
     const skillPlan = {
       mode: skillPolicy.mode,
-      items: matchedSkillDefs.map((skill) => ({
-        id: skill.id,
-        name: skill.name,
-        state: (skillPolicy.mode === 'only' || skill.manifest.required) ? 'injected' as const : 'candidate' as const
-      }))
+      items: [...selectedSkillItems, ...skippedSkillItems]
     }
     const contextItems: AssistantTurnPreview['contextItems'] = contextResult.slices.map((slice) => {
       const providerId = String(slice.providerId)
@@ -300,8 +328,11 @@ export function createExecutionPlanner(
     if (contextResult.truncatedProviderIds.length > 0) {
       previewWarnings.push(`有 ${contextResult.truncatedProviderIds.length} 类上下文未直接注入，AI 将通过工具按需查询。`)
     }
-    if (skillPolicy.mode === 'auto' && skillPlan.items.length === 0) {
-      previewWarnings.push('自动模式下本轮没有匹配到可用 Skill。')
+    if (skillPolicy.mode === 'auto' && matchedSkillDefs.length === 0) {
+      previewWarnings.push('自动模式下本轮没有匹配到可用 Skill，将只使用项目上下文和助手默认规则。')
+    }
+    if (skillPolicy.mode === 'only' && matchedSkillDefs.length === 0) {
+      previewWarnings.push('固定使用的 Skill 均不适用当前任务，将不注入 Skill，也不会改用组合外的 Skill。')
     }
     const preview: AssistantTurnPreview = {
       intent: runtimePlan.intent,
@@ -310,7 +341,11 @@ export function createExecutionPlanner(
       contextBudgetTokens,
       contextUsedTokens: contextResult.usedTokens,
       contextItems,
-      skillPolicy: { mode: skillPolicy.mode, skillIds: [...skillPolicy.skillIds] },
+      skillPolicy: {
+        mode: skillPolicy.mode,
+        skillIds: [...skillPolicy.skillIds],
+        ...(skillPolicy.presetId ? { presetId: skillPolicy.presetId } : {})
+      },
       skills: skillPlan.items,
       provider: settings.provider,
       model: settings.model,
@@ -339,12 +374,6 @@ function taskForSurface(surface: SurfaceDefinition): AiTaskName {
     : 'global-assistant'
 }
 
-function stripSkillFrontmatter(content: string): string {
-  const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/)
-  if (!match) return content
-  return content.slice(match[0].length)
-}
-
 function hasSkillToolAccess(surface: SurfaceDefinition): boolean {
   const matchers = resolveAllowedMatchers(surface)
   return isToolAllowed('skill_load', matchers)
@@ -353,7 +382,8 @@ function hasSkillToolAccess(surface: SurfaceDefinition): boolean {
 function buildV2SkillPromptBlock(
   skills: SkillDefinition[],
   surface: SurfaceDefinition,
-  forceInject: boolean
+  forceInject: boolean,
+  task: AiTaskPayload
 ): string {
   if (!skills.length) return ''
 
@@ -368,7 +398,7 @@ function buildV2SkillPromptBlock(
         : '## 强制生效的 SKILLS（已直接注入，无需调用 skill_load）',
       '',
       ...requiredSkills.map((skill) => {
-        const body = stripSkillFrontmatter(skill.content).trim().slice(0, 2000)
+        const body = buildSkillContentExcerpt(skill, task, 2400)
         return `### ${skill.name}\n${body}`
       })
     ].join('\n'))
@@ -414,7 +444,7 @@ function createV2SkillTask(params: {
       userPrompt: params.request.userMessage,
       originalUserPrompt: params.request.userMessage,
       quickAction: params.request.intentHint ?? '',
-      stageId: resolveSkillStage(params.runtimePlan, params.surface, params.request.userMessage),
+      stageId: params.runtimePlan.skillStageId,
       chapterId: chapter?.id ?? '',
       chapterTitle: chapter?.title ?? '',
       chapterSummary: chapter?.summary ?? '',
@@ -423,23 +453,6 @@ function createV2SkillTask(params: {
       focusType: params.request.attachments?.map((item) => item.kind).join(',') ?? ''
     }
   }
-}
-
-function resolveSkillStage(
-  runtimePlan: AssistantRuntimePlan,
-  surface: SurfaceDefinition,
-  userMessage: string
-): SkillStageId | undefined {
-  const text = userMessage.replace(/\s+/g, '')
-  if (/(拆书|参考书|对标|风格分析|参考分析)/.test(text)) return 'reference'
-  if (/(大纲|剧情节点|分卷|卷纲)/.test(text)) return 'outline'
-  if (surface.scope === 'chapter' || surface.scope === 'selection') return 'draft'
-  if (/(正文|章节|润色|改写|续写|扩写|初稿)/.test(text)) return 'draft'
-  if (/(简介|立意|卖点|题材|开书|项目初始化)/.test(text)) return 'premise'
-  if (runtimePlan.intent === 'entity-edit' || runtimePlan.intent === 'ingest' || runtimePlan.intent === 'correct') {
-    return 'setting'
-  }
-  return undefined
 }
 
 function resolveContextBudgetTokens(

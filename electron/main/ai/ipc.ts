@@ -5,7 +5,6 @@ import { runAiTask, streamAiTask, testAiConnection, fetchModels, fetchImageModel
 import { runStreamingAgentTask } from './agent/streaming-orchestrator'
 import { isToolUseNotSupportedError } from './provider'
 import { setChapterPostGenerationIssuesEmitter, setChapterPostGenerationTaskEmitter, setChapterWarningsEmitter } from './runtime/orchestrator'
-import { retrieveKnowledgeContext } from './knowledge-retrieval'
 import { buildRunMeta } from './runtime/run-meta'
 import { backfillProjectStateFromChapters, getProjectBackfillChapterStatuses } from './state-backfill'
 import type { BackfillTaskSnapshot } from './state-backfill'
@@ -18,8 +17,9 @@ import { runSpiralBootstrap } from './spiral'
 import type { SpiralBootstrapInput } from './spiral'
 import { formatAiErrorMessage } from './error-message'
 import { testProxyConnection } from './proxy-fetch'
-import { normalizeSettings } from './settings'
-import { isCodexCliProvider, shouldTryStreamingAgent } from '@shared/ai-provider-catalog'
+import { isCodexCliProvider } from '@shared/ai-provider-catalog'
+import type { WorkspacePayload } from '../workspace-types'
+import { prepareAiExecution } from './runtime/execution-kernel'
 
 /**
  * AI IPC 模块的外部依赖注入接口。
@@ -27,7 +27,7 @@ import { isCodexCliProvider, shouldTryStreamingAgent } from '@shared/ai-provider
  */
 type AiIpcDeps = {
   /** 获取最新工作区快照（知识文档、AI 运行记录等） */
-  getLatestWorkspaceSnapshot: () => { knowledgeDocuments?: unknown[]; workspaces?: Record<string, { aiRuns?: unknown[] }> } | null
+  getLatestWorkspaceSnapshot: () => WorkspacePayload | null
   /** 向 renderer 广播 AI 运行事件 */
   emitAiRunEvent: (payload: { projectId: string; meta: Record<string, unknown> }) => void
   /** 向 renderer 广播章节状态告警事件 */
@@ -102,7 +102,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
       activeAiTasks.set(clientTaskId, controller)
     }
 
-    const knowledgeContext = retrieveKnowledgeContext(payload, deps!.getLatestWorkspaceSnapshot() as Parameters<typeof retrieveKnowledgeContext>[1])
+    const { knowledgeContext } = prepareAiExecution(payload, deps!.getLatestWorkspaceSnapshot())
     try {
       if (controller.signal.aborted) {
         throw new Error('任务已被取消。')
@@ -140,16 +140,10 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
     try {
       const streamId = `stream-${randomUUID()}`
       const controller = new AbortController()
-      const knowledgeContext = retrieveKnowledgeContext(payload, deps!.getLatestWorkspaceSnapshot() as Parameters<typeof retrieveKnowledgeContext>[1])
+      const prepared = prepareAiExecution(payload, deps!.getLatestWorkspaceSnapshot())
+      const { knowledgeContext } = prepared
       activeAiStreams.set(streamId, controller)
-      const normalizedSettings = normalizeSettings(payload.settings)
-
-      const shouldTryAgent = shouldTryStreamingAgent(
-        payload.task,
-        normalizedSettings.provider,
-        normalizedSettings.model,
-        normalizedSettings.apiProtocol
-      )
+      const shouldTryAgent = prepared.useStreamingAgent
 
       let streamedContent = ''
       void (async () => {
@@ -285,12 +279,13 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
     try {
       const streamId = `agent-${randomUUID()}`
       const controller = new AbortController()
-      const knowledgeContext = retrieveKnowledgeContext(payload, deps!.getLatestWorkspaceSnapshot() as Parameters<typeof retrieveKnowledgeContext>[1])
+      const prepared = prepareAiExecution(payload, deps!.getLatestWorkspaceSnapshot())
+      const { knowledgeContext } = prepared
       activeAiStreams.set(streamId, controller)
       let streamedContent = ''
       void (async () => {
         try {
-          const normalizedSettings = normalizeSettings(payload.settings)
+          const normalizedSettings = prepared.settings
           if (!isCodexCliProvider(normalizedSettings.provider)) {
             try {
               const result = await runStreamingAgentTask(

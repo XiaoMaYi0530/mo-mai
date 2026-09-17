@@ -5,13 +5,18 @@ import type { SkillDefinition } from './types'
  * 旧版导入可能只改了 frontmatter 的 name 或目录名，正文规则实际完全相同。
  */
 export function resolveSkillContentIdentity(skill: SkillDefinition): string {
-  const lines = String(skill.content ?? '').replace(/\r\n?/g, '\n').split('\n')
+  return resolveSkillContentIdentityFromText(skill.content)
+}
+
+/** 对原始 SKILL.md 生成内容标识，忽略仅用于展示的 name 字段。 */
+export function resolveSkillContentIdentityFromText(content: string): string {
+  const lines = String(content ?? '').replace(/\r\n?/g, '\n').split('\n')
   if (lines[0]?.trim() === '---') {
     const closingIndex = lines.slice(1).findIndex((line) => line.trim() === '---')
     if (closingIndex >= 0) {
       const frontmatterEnd = closingIndex + 1
       for (let index = 1; index < frontmatterEnd; index += 1) {
-        if (/^\s*name\s*:/i.test(lines[index] ?? '')) lines[index] = ''
+        if (/^\s*(?:name|version)\s*:/i.test(lines[index] ?? '')) lines[index] = ''
       }
     }
   }

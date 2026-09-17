@@ -8,10 +8,11 @@ import {
 } from '@/features/chapters/editorContent'
 import { formatChapterWordTargetLabel, parseChapterWordTarget } from '@/features/chapters/wordTarget'
 import { useAppStore } from '@/stores/app'
-import type { KnowledgeDocument, ReferenceStyleAnalysis } from '@/types/app'
+import type { KnowledgeDocument } from '@/types/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
 import { stripReasoningMarkup } from '@/features/ai/reasoning'
 import { buildChapterWordCountIssue } from '@shared/chapter-audit-policy'
+import { buildProjectStyleFingerprintContext } from '@shared/style-fingerprint-binding'
 
 const TASK_KEY = 'chapter-first-draft'
 
@@ -35,6 +36,7 @@ export type FirstDraftStepConfig = {
   enabled: boolean
   skillMode: FirstDraftSkillMode
   skillIds: string[]
+  skillPresetId?: string
   userPrompt: string
   failurePolicy: FirstDraftFailurePolicy
 }
@@ -101,6 +103,7 @@ export function getFirstDraftConfigSignature(config: FirstDraftConfig): string {
       enabled: config.steps[id]?.enabled ?? false,
       skillMode: config.steps[id]?.skillMode ?? 'auto',
       skillIds: [...(config.steps[id]?.skillIds ?? [])].sort(),
+      skillPresetId: config.steps[id]?.skillPresetId ?? '',
       userPrompt: config.steps[id]?.userPrompt ?? '',
       failurePolicy: config.steps[id]?.failurePolicy ?? 'skip'
     }))
@@ -201,6 +204,7 @@ export function createDefaultFirstDraftSteps(): Record<FirstDraftStepId, FirstDr
       enabled: step.required ? true : step.defaultEnabled,
       skillMode: 'auto',
       skillIds: [],
+      skillPresetId: undefined,
       userPrompt: '',
       failurePolicy: step.defaultFailurePolicy
     }
@@ -233,7 +237,10 @@ function resolveFirstDraftSteps(config: FirstDraftConfig): Record<FirstDraftStep
       skillMode: current?.skillMode === 'only' || current?.skillMode === 'off'
         ? current.skillMode
         : (current?.skillMode as string) === 'manual' ? 'only' : 'auto',
-      skillIds: Array.isArray(current?.skillIds) ? [...current.skillIds] : []
+      skillIds: Array.isArray(current?.skillIds) ? [...current.skillIds] : [],
+      skillPresetId: typeof current?.skillPresetId === 'string' && current.skillPresetId.trim()
+        ? current.skillPresetId.trim()
+        : undefined
     }
     return acc
   }, {} as Record<FirstDraftStepId, FirstDraftStepConfig>)
@@ -301,54 +308,17 @@ function buildLocalDraftAudit(text: string, targetWordCount: number): ChapterAud
   return normalizeAuditWordCount({ pass: true, wordCount: trimmed.length, issues }, targetWordCount, trimmed.length)
 }
 
-/** 把单个参考作品的拆书分析整理成一段风格提示文本。优先用作品自带的 analysis，兜底用拆书总纲文档。 */
-function formatReferenceWorkStyle(
-  work: { title: string; analysis?: ReferenceStyleAnalysis },
-  summaryDoc?: { summary?: string; content: string }
-): string {
-  const a = work.analysis
-  const lines: string[] = []
-  if (a?.overview) lines.push(`风格总述：${a.overview}`)
-  if (a?.sentenceStyle) lines.push(`句式特征：${a.sentenceStyle}`)
-  if (a?.dialogueRatio) lines.push(`对白策略：${a.dialogueRatio}`)
-  if (a?.pacingControl) lines.push(`节奏控制：${a.pacingControl}`)
-  if (a?.emotionExpression) lines.push(`情绪表达：${a.emotionExpression}`)
-  if (a?.narrativePerspective) lines.push(`叙事视角：${a.narrativePerspective}`)
-  if (a?.styleRules?.length) lines.push(`风格规则：${a.styleRules.join('；')}`)
-  if (a?.reusableStylePrompt) lines.push(`仿写模板：${a.reusableStylePrompt}`)
-  if (a?.avoidRules?.length) lines.push(`避免照搬：${a.avoidRules.join('；')}`)
-  // analysis 为空时兜底用拆书总纲文档的摘要 / 正文
-  if (!lines.length && summaryDoc) {
-    const snippet = (summaryDoc.summary || summaryDoc.content || '').slice(0, 600).trim()
-    if (snippet) lines.push(snippet)
-  }
-  if (!lines.length) return ''
-  return `【${work.title}】\n${lines.join('\n')}`
-}
-
-function buildReferenceStyleContext(selectedRefIds: string[]): string {
-  if (!selectedRefIds.length) return ''
-  const { referenceWorks, knowledgeDocuments } = useAppStore()
-  const selectedWorks = referenceWorks.filter((w) => selectedRefIds.includes(w.id))
-  if (!selectedWorks.length) return ''
-  // 拆书总纲文档按 sourceTitle 建索引，仅作为 analysis 缺失时的兜底数据源
-  const summaryByTitle = new Map<string, { summary?: string; content: string }>()
-  for (const d of knowledgeDocuments) {
-    if (d.sourceType !== 'reference-summary') continue
-    const title = String(d.metadata?.sourceTitle ?? '').trim()
-    if (title && !summaryByTitle.has(title)) summaryByTitle.set(title, d)
-  }
-  const MAX_TOTAL_CHARS = 1800
-  let totalChars = 0
-  const parts: string[] = []
-  for (const work of selectedWorks.slice(0, 3)) {
-    const block = formatReferenceWorkStyle(work, summaryByTitle.get(work.title))
-    if (!block) continue
-    if (totalChars + block.length > MAX_TOTAL_CHARS) break
-    parts.push(block)
-    totalChars += block.length
-  }
-  return parts.join('\n\n')
+function buildReferenceStyleContext(): string {
+  const appStore = useAppStore()
+  const project = appStore.currentProject
+  if (!project) return ''
+  return buildProjectStyleFingerprintContext({
+    binding: project.styleFingerprintBinding,
+    fallbackReferenceWorkIds: project.selectedReferenceWorkIds,
+    referenceWorks: appStore.referenceWorks,
+    documents: appStore.knowledgeDocuments,
+    maxChars: 3200
+  }).context
 }
 
 export type ChapterAuditPayload = {
@@ -405,6 +375,7 @@ export function useChapterFirstDraft(): {
 
   const streamId = ref<string | null>(null)
   const currentStreamTask = ref<StreamTaskName | null>(null)
+  let lastReasoningTask: StreamTaskName | null = null
   let resolveStream: ((result: StreamTaskResult) => void) | null = null
   let rejectStream: ((err: Error) => void) | null = null
   let removeListener: (() => void) | null = null
@@ -559,6 +530,17 @@ export function useChapterFirstDraft(): {
 
     if (payload.type === 'reasoning') {
       isStreaming.value = true
+      if (currentStreamTask.value && lastReasoningTask !== currentStreamTask.value) {
+        const taskLabel: Record<StreamTaskName, string> = {
+          'chapter-memo': '写作备忘',
+          'chapter-first-draft': '生成初稿',
+          'chapter-audit': '深度审计',
+          'chapter-repair': '自动修复',
+          'chapter-humanize': '正文润色'
+        }
+        reasoningContent.value += `${reasoningContent.value ? '\n\n' : ''}【${taskLabel[currentStreamTask.value]}】\n`
+        lastReasoningTask = currentStreamTask.value
+      }
       reasoningContent.value += payload.delta
       executionLabel.value = '正在构思本章（思考中）...'
       recompute()
@@ -609,7 +591,6 @@ export function useChapterFirstDraft(): {
 
   async function streamTask(task: StreamTaskName, context: Record<string, unknown>): Promise<StreamTaskResult> {
     currentStreamTask.value = task
-    reasoningContent.value = ''
     if (task === 'chapter-first-draft') {
       streamingContent.value = ''
       streamingCharCount.value = 0
@@ -674,12 +655,15 @@ export function useChapterFirstDraft(): {
     const chapterVolume = appStore.selectedChapterVolume
     if (!chapter || !project || !chapterVolume) return false
     if (isGenerating.value) return false
+    const projectStyleFingerprintContext = buildReferenceStyleContext()
 
     registerStreamListener()
     isGenerating.value = true
     isStopping.value = false
     isStreaming.value = false
     streamingContent.value = ''
+    reasoningContent.value = ''
+    lastReasoningTask = null
     activeTargetWordCount.value = Math.max(config.targetWordCount || parseChapterWordTarget(chapter.wordTarget), 1)
     progressFloor.value = 0
     progressPercent.value = 0
@@ -817,7 +801,8 @@ export function useChapterFirstDraft(): {
               projectSkills: project.projectSkills ?? [],
               skillPolicy: {
                 mode: step.skillMode,
-                skillIds: step.skillMode === 'only' ? step.skillIds : []
+                skillIds: step.skillMode === 'only' ? step.skillIds : [],
+                ...(step.skillMode === 'only' && step.skillPresetId ? { presetId: step.skillPresetId } : {})
               }
             }
           }
@@ -935,7 +920,7 @@ export function useChapterFirstDraft(): {
             ...draftSkillContext,
             recentEndingsTrail,
             previousChapterHandoff,
-            referenceStyleContext: buildReferenceStyleContext(config.selectedReferenceWorkIds)
+            referenceStyleContext: projectStyleFingerprintContext
           })
 
           executionLabel.value = '检索相关章节与情节线索'
@@ -1116,6 +1101,7 @@ export function useChapterFirstDraft(): {
                       projectGenre: project.genre,
                       writingStyleLabel: project.writingStylePresetId,
                       writingStylePrompt: project.writingStylePrompt,
+                      referenceStyleContext: projectStyleFingerprintContext,
                       auditIssues: criticalIssues,
                       chapterMemoText: formatMemoForRepair(chapterMemo),
                       ...repairSkillContext,
@@ -1172,6 +1158,7 @@ export function useChapterFirstDraft(): {
                     chapterSummary: chapter.summary,
                     writingStyleLabel: project.writingStylePresetId,
                     writingStylePrompt: project.writingStylePrompt,
+                    referenceStyleContext: projectStyleFingerprintContext,
                     sourceText: finalText,
                     ...humanizeSkillContext,
                     userPrompt: steps.humanize.userPrompt

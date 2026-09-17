@@ -335,6 +335,8 @@ function toolStatusText(t: AssistantToolCallView): string {
 function skillStateText(state: AssistantMessageView['skillReceipt'][number]['state']): string {
   if (state === 'loaded') return '已加载'
   if (state === 'injected') return '已注入'
+  if (state === 'skipped') return '已跳过'
+  if (state === 'failed') return '加载失败'
   return '候选'
 }
 
@@ -662,11 +664,16 @@ const hasContent = computed(() => props.messages.length > 0)
       <div v-if="msg.status === 'canceled'" class="status-tag">已取消</div>
 
       <div v-if="msg.skillMode === 'off' || msg.skillReceipt.length > 0" class="skill-receipt">
-        <Sparkles :size="13" />
-        <span>{{ msg.skillMode === 'off' ? '本轮未使用 Skill' : '本轮技能' }}</span>
-        <em v-for="skill in msg.skillReceipt" :key="skill.id">
-          {{ skill.name }}（{{ skillStateText(skill.state) }}）
-        </em>
+        <div class="skill-receipt-title">
+          <Sparkles :size="13" />
+          <span>{{ msg.skillMode === 'off' ? '本轮未使用 Skill' : '本轮 Skill 回执' }}</span>
+        </div>
+        <div v-if="msg.skillMode !== 'off'" class="skill-receipt-items">
+          <em v-for="skill in msg.skillReceipt" :key="skill.id" :class="skill.state">
+            <b>{{ skill.name }}（{{ skillStateText(skill.state) }}）</b>
+            <small v-if="skill.reason">{{ skill.reason }}</small>
+          </em>
+        </div>
       </div>
 
       <div v-if="msg.resumable && msg.status === 'done'" class="continue-line">
@@ -1368,23 +1375,32 @@ const hasContent = computed(() => props.messages.length > 0)
 }
 .skill-receipt {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+  align-items: flex-start;
+  flex-direction: column;
   gap: 6px;
   color: var(--arc-text-hint);
   font-size: 11px;
 }
-.skill-receipt > span {
+.skill-receipt-title { display: inline-flex; align-items: center; gap: 5px; }
+.skill-receipt-title > span {
   color: var(--arc-text-secondary);
   font-weight: 600;
 }
+.skill-receipt-items { display: flex; flex-wrap: wrap; gap: 6px; }
 .skill-receipt em {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
   padding: 2px 7px;
   border-radius: 999px;
   background: var(--arc-primary-soft);
   color: var(--arc-primary);
   font-style: normal;
 }
+.skill-receipt em b { font-size: 11px; font-weight: 600; }
+.skill-receipt em small { max-width: 300px; font-size: 9.5px; line-height: 1.35; }
+.skill-receipt em.skipped { background: var(--arc-bg-body); color: var(--arc-text-hint); }
+.skill-receipt em.failed { background: color-mix(in srgb, var(--arc-danger, #d03050) 10%, transparent); color: var(--arc-danger, #d03050); }
 
 @media (max-width: 720px) {
   .messages {

@@ -70,7 +70,7 @@ function isPlaceholder(value: string): boolean {
  * 书籍级项目小结：从结构化项目数据实时派生，永远不覆盖用户的创作记忆。
  * 小结只负责定位与进度；需要精确事实时仍由 read/search 工具读取源实体。
  */
-export function buildProjectDigest(params: {
+export function buildCreativeMemoryLedger(params: {
   project: ProjectRecord
   workspace: ProjectWorkspace
   knowledgeDocuments: readonly KnowledgeDocument[]
@@ -85,13 +85,26 @@ export function buildProjectDigest(params: {
     ? volumes.get(currentChapter.volumeId)
     : workspace.outlineVolumes[0]
   const orderedOutline = workspace.outlineItems.slice().sort((a, b) => a.sortOrder - b.sortOrder)
-  const writtenOutlineIds = new Set(workspace.chapters.map((chapter) => chapter.outlineItemId).filter(Boolean))
+  // 仅创建了空白章节不代表大纲已经落实；否则“拆书转骨架”创建的空章节会让
+  // 项目小结误以为整部书都已写完，从而丢掉后续剧情节点。
+  const chaptersByOutline = new Map<string, typeof workspace.chapters>()
+  for (const chapter of workspace.chapters) {
+    if (!chapter.outlineItemId) continue
+    const group = chaptersByOutline.get(chapter.outlineItemId) ?? []
+    group.push(chapter)
+    chaptersByOutline.set(chapter.outlineItemId, group)
+  }
+  const writtenOutlineIds = new Set([...chaptersByOutline.entries()]
+    .filter(([, chapters]) => chapters.length > 0 && chapters.every((chapter) =>
+      stripHtml(chapter.content).replace(/\s+/g, '').length >= 80 || chapter.status === 'final'))
+    .map(([outlineId]) => outlineId))
   const currentOutline = currentChapter?.outlineItemId
     ? orderedOutline.find((item) => item.id === currentChapter.outlineItemId)
     : undefined
   const currentOutlineIndex = currentOutline ? orderedOutline.findIndex((item) => item.id === currentOutline.id) : -1
+  const currentOutlineImplemented = Boolean(currentOutline?.id && writtenOutlineIds.has(currentOutline.id))
   const upcomingOutline = orderedOutline
-    .slice(currentOutlineIndex >= 0 ? currentOutlineIndex + 1 : 0)
+    .slice(currentOutlineIndex >= 0 ? currentOutlineIndex + (currentOutlineImplemented ? 1 : 0) : 0)
     .filter((item) => !writtenOutlineIds.has(item.id))
     .slice(0, 5)
   const recentChapters = workspace.chapters.slice(-5)
@@ -179,3 +192,6 @@ export function buildProjectDigest(params: {
   lines.push('', '> 这是自动派生的小结，仅用于定位。修改前应按实体 ID 读取源资料，不得用小结覆盖源数据。')
   return lines.join('\n')
 }
+
+/** 兼容旧调用；项目小结现在由统一的创作记忆账本生成。 */
+export const buildProjectDigest = buildCreativeMemoryLedger

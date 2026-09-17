@@ -81,6 +81,45 @@ export interface AiTaskRunInput {
  * 失败任务由任务中心保留到用户手动关闭。
  */
 export const AI_TASK_RETENTION_MS = 4_500
+export const AI_TASK_STORAGE_KEY = 'characterarc:recoverable-ai-tasks:v1'
+
+type PersistedAiTaskRun = Omit<AiTaskRun, 'onCancel'>
+
+/** 把任务中心状态保存为纯数据；取消回调不能跨应用重启。 */
+export function serializeAiTaskRuns(runs: ReadonlyMap<string, AiTaskRun>): string {
+  const values: PersistedAiTaskRun[] = Array.from(runs.values()).map(({ onCancel: _onCancel, ...run }) => run)
+  return JSON.stringify(values)
+}
+
+/**
+ * 恢复任务中心。上次仍在运行的任务会明确标记为“已中断”，避免重启后误以为仍在执行。
+ * 具体业务从原入口重试；有检查点的拆书/补录任务会自动只补缺失步骤。
+ */
+export function restoreAiTaskRuns(serialized: string | null, now = Date.now()): Map<string, AiTaskRun> {
+  if (!serialized) return new Map()
+  try {
+    const parsed = JSON.parse(serialized)
+    if (!Array.isArray(parsed)) return new Map()
+    const result = new Map<string, AiTaskRun>()
+    for (const value of parsed) {
+      if (!value || typeof value !== 'object') continue
+      const run = value as PersistedAiTaskRun
+      if (!run.key || !run.label || !Number.isFinite(run.startedAt)) continue
+      if (run.stage === 'done' || run.stage === 'canceled') continue
+      result.set(run.key, run.stage === 'running'
+        ? {
+            ...run,
+            stage: 'error',
+            finishedAt: now,
+            error: '上次任务因应用退出或重启而中断。请回到原功能重新执行；支持断点的任务会从未完成步骤继续。'
+          }
+        : run)
+    }
+    return result
+  } catch {
+    return new Map()
+  }
+}
 
 export type ExternalAiTaskEvent = {
   taskKey: string

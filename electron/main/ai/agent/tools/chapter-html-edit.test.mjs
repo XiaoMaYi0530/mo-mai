@@ -5,8 +5,16 @@ import {
   insertInHtml,
   joinChapterBlocks,
   replaceInHtml,
-  replaceAllInHtml
+  replaceAllInHtml,
+  stripHtmlTags
 } from './chapter-html-edit.ts'
+
+test('章节 HTML 转纯文本时保留段落和硬换行，避免整章 Diff 退化为一行', () => {
+  assert.equal(
+    stripHtmlTags('<p>第一段相同。</p><p>第二段相同。<br>仍属第二段。</p><p>第三段。</p>'),
+    '第一段相同。\n第二段相同。\n仍属第二段。\n第三段。'
+  )
+})
 
 test('段内替换不会生成嵌套 p 或额外空段落', () => {
   const result = replaceInHtml('<p>风从旧城吹过。</p>', '旧城', '北境')

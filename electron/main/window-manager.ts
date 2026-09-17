@@ -2,6 +2,8 @@ import { app, BrowserWindow, nativeTheme, screen, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { APP_DISPLAY_NAME } from './app-brand'
+
 export type WindowManager = ReturnType<typeof createWindowManager>
 export interface TitleBarOverlayColors {
   color: string
@@ -95,7 +97,7 @@ export function createWindowManager() {
         ? { trafficLightPosition: { x: 14, y: 13 } }
         : { titleBarOverlay: { color: '#f8f7f4', symbolColor: '#1c1917', height: 40 } }),
       autoHideMenuBar: true,
-      title: `弧光 v${app.getVersion()}`,
+      title: `${APP_DISPLAY_NAME} v${app.getVersion()}`,
       backgroundColor: '#f8f7f4',
       show: false,
       webPreferences: {

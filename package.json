@@ -1,24 +1,35 @@
 {
-  "name": "characterarc",
-  "version": "1.22.4",
-  "description": "CharacterArc desktop writing studio",
+  "name": "mo-mai",
+  "version": "1.22.25",
+  "description": "墨脉 AI 小说创作桌面应用",
   "packageManager": "pnpm@10.33.2",
   "main": "./dist-electron/main/index.js",
   "author": "zhouyeshan <zhouyeshan@users.noreply.github.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/15810785091/mo-mai.git"
+  },
   "scripts": {
     "dev": "electron-vite dev",
-    "test": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test electron/shared/continuation-import.test.mjs electron/main/workspace-types.test.mjs renderer/src/features/workspace/outlineReorder.test.mjs renderer/src/features/workspace/outlineCardPresentation.test.mjs renderer/src/features/workspace/volumeCollapseState.test.mjs renderer/src/features/workspace/workbenchMenu.test.mjs renderer/src/features/chapters/chapterFormatting.test.mjs renderer/src/features/chapters/chapterReference.test.mjs renderer/src/features/chapters/chapterSplit.test.mjs renderer/src/features/ai/taskRegistry.test.mjs renderer/src/features/ai/outlineReferences.test.mjs renderer/src/features/assistant/assistantSurfaces.test.mjs renderer/src/features/tutorials/tutorials.test.mjs renderer/src/features/knowledge/knowledgeCenter.test.mjs electron/main/story-state-store.test.mjs electron/main/knowledge-document-schema.test.mjs electron/main/ai/settings.test.mjs electron/main/ai/codex-cli.test.mjs electron/main/ai/generate.test.mjs electron/main/ai/provider.test.mjs electron/main/ai/protocol-adapter.test.mjs electron/main/ai/proxy-fetch.test.mjs electron/main/ai/knowledge-retrieval.test.mjs electron/main/ai/state-backfill-store.test.mjs electron/main/ai/state-backfill-task-controller.test.mjs electron/main/ai/runtime/background-task-coordinator.test.mjs electron/main/ai/runtime/chapter-processing-store.test.mjs electron/main/ai/tasks/chapter-session-note.test.mjs electron/main/ai/tasks/outline-context.test.mjs electron/main/ai/tasks/story-state-generation.test.mjs electron/main/ai/tasks/worldview-type.test.mjs electron/main/ai/tasks/ranking-analysis.test.mjs electron/main/ai/tasks/qimao-ranking.test.mjs electron/main/ai/tasks/zongheng-ranking.test.mjs electron/main/ai/runtime-v2/conversation-manager.test.mjs electron/main/ai/runtime-v2/staged-changes-store.test.mjs electron/main/ai/runtime-v2/commit-result.test.mjs electron/main/ai/runtime-v2/context-builder.test.mjs electron/main/ai/runtime-v2/context-memory.test.mjs electron/main/ai/runtime-v2/planner-policy.test.mjs electron/main/ai/runtime-v2/tool-selection-policy.test.mjs electron/main/ai/runtime-v2/agent-loop.test.mjs electron/main/ai/agent/codex-tool-loop-policy.test.mjs electron/main/ai/agent/codex-tool-name.test.mjs electron/main/ai/agent/run-agent-codex-cli.test.mjs electron/main/ai/agent/tools/text-window.test.mjs electron/main/ai/agent/tools/knowledge-tools.test.mjs electron/main/ai/agent/tools/chapter-data-access.test.mjs electron/main/ai/agent/tools/chapter-html-edit.test.mjs electron/main/ai/runtime-v2/tools/stage-chapter-edit-core.test.mjs",
+    "test": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test electron/shared/continuation-import.test.mjs electron/shared/reference-deep-analysis.test.mjs electron/main/workspace-types.test.mjs renderer/src/features/workspace/outlineReorder.test.mjs renderer/src/features/workspace/outlineCardPresentation.test.mjs renderer/src/features/workspace/volumeCollapseState.test.mjs renderer/src/features/workspace/workbenchMenu.test.mjs renderer/src/features/chapters/chapterFormatting.test.mjs renderer/src/features/chapters/chapterReference.test.mjs renderer/src/features/chapters/chapterSplit.test.mjs renderer/src/features/ai/taskRegistry.test.mjs renderer/src/features/ai/outlineReferences.test.mjs renderer/src/features/assistant/assistantSurfaces.test.mjs renderer/src/features/assistant/stagedTextDiff.test.mjs renderer/src/features/tutorials/tutorials.test.mjs renderer/src/features/knowledge/knowledgeCenter.test.mjs renderer/src/features/knowledge/referenceBlueprint.test.mjs renderer/src/features/knowledge/deepAnalysisSampling.test.mjs electron/main/story-state-store.test.mjs electron/main/knowledge-document-schema.test.mjs electron/main/ai/settings.test.mjs electron/main/ai/codex-cli.test.mjs electron/main/ai/generate.test.mjs electron/main/ai/provider.test.mjs electron/main/ai/protocol-adapter.test.mjs electron/main/ai/proxy-fetch.test.mjs electron/main/ai/knowledge-retrieval.test.mjs electron/main/ai/state-backfill-store.test.mjs electron/main/ai/state-backfill-task-controller.test.mjs electron/main/ai/runtime/background-task-coordinator.test.mjs electron/main/ai/runtime/chapter-processing-store.test.mjs electron/main/ai/tasks/chapter-session-note.test.mjs electron/main/ai/tasks/outline-context.test.mjs electron/main/ai/tasks/story-state-generation.test.mjs electron/main/ai/tasks/worldview-type.test.mjs electron/main/ai/tasks/ranking-analysis.test.mjs electron/main/ai/tasks/qimao-ranking.test.mjs electron/main/ai/tasks/zongheng-ranking.test.mjs electron/main/ai/runtime-v2/conversation-manager.test.mjs electron/main/ai/runtime-v2/staged-changes-store.test.mjs electron/main/ai/runtime-v2/commit-result.test.mjs electron/main/ai/runtime-v2/context-builder.test.mjs electron/main/ai/runtime-v2/context-memory.test.mjs electron/main/ai/runtime-v2/planner-policy.test.mjs electron/main/ai/runtime-v2/tool-selection-policy.test.mjs electron/main/ai/runtime-v2/agent-loop.test.mjs electron/main/ai/agent/codex-tool-loop-policy.test.mjs electron/main/ai/agent/codex-tool-name.test.mjs electron/main/ai/agent/run-agent-codex-cli.test.mjs electron/main/ai/agent/tools/text-window.test.mjs electron/main/ai/agent/tools/knowledge-tools.test.mjs electron/main/ai/agent/tools/chapter-data-access.test.mjs electron/main/ai/agent/tools/chapter-html-edit.test.mjs electron/main/ai/runtime-v2/tools/stage-chapter-edit-core.test.mjs electron/main/ai/runtime-v2/tools/outline-create-resolution.test.mjs electron/main/ai/runtime-v2/skill-stage.test.mjs",
+    "test:reference-blueprint": "node --test renderer/src/features/knowledge/referenceBlueprint.test.mjs",
+    "test:codex-session": "node --test --experimental-strip-types electron/main/ai/agent/codex-session-state.test.mjs",
+    "test:reference-text": "node --test --experimental-strip-types electron/main/reference-text.test.mjs renderer/src/features/knowledge/styleFingerprint.test.mjs",
+    "test:staged-diff": "node --test --experimental-strip-types electron/main/ai/agent/tools/chapter-html-edit.test.mjs renderer/src/features/assistant/stagedTextDiff.test.mjs",
+    "test:staged-references": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test electron/shared/staged-reference-labels.test.mjs",
     "test:chapter-audit": "node --test --experimental-strip-types electron/shared/chapter-audit-policy.test.mjs",
+    "test:style-fingerprint-binding": "node --test --experimental-strip-types electron/shared/style-fingerprint-binding.test.mjs",
     "test:conversation-scroll": "node --test renderer/src/features/assistant/conversationScrollLifecycle.test.mjs",
-    "test:skill-policy": "node --test electron/main/ai/skills/policy.test.mjs electron/main/ai/skills/registry-merge.test.mjs electron/main/ai/skills/selection-priority.test.mjs renderer/src/features/assistant/assistantIpcPayload.test.mjs",
+    "test:skill-policy": "node --test electron/main/ai/skills/frontmatter.test.mjs electron/main/ai/skills/policy.test.mjs electron/main/ai/skills/registry-merge.test.mjs electron/main/ai/skills/selection-priority.test.mjs electron/main/ai/skills/skill-import.test.mjs electron/main/ai/skills/content-slice.test.mjs electron/shared/skill-genres.test.mjs electron/shared/skill-presets.test.mjs electron/shared/skill-preset-bindings.test.mjs renderer/src/features/assistant/assistantIpcPayload.test.mjs",
     "test:ranking": "set ELECTRON_RUN_AS_NODE=1&& electron --test electron/main/ai/tasks/ranking-analysis.test.mjs",
     "typecheck": "vue-tsc --noEmit",
     "build": "pnpm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
     "dist": "pnpm run build && cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder",
     "dist:win": "pnpm run build && cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win",
-    "dist:mac": "pnpm run build && cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --mac"
+    "dist:mac": "pnpm run build && cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --mac && node scripts/cleanup-dist.cjs",
+    "cleanup:dist": "node scripts/cleanup-dist.cjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.78",
@@ -64,7 +75,7 @@
   },
   "build": {
     "appId": "com.characterarc.desktop",
-    "productName": "CharacterArc",
+    "productName": "墨脉",
     "directories": {
       "buildResources": "resources"
     },
@@ -100,8 +111,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "target": [
-        "dmg",
-        "zip"
+        "dmg"
       ],
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
     },

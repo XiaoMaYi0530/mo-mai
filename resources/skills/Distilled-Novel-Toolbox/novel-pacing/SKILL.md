@@ -1,6 +1,6 @@
 ---
-name: novel-pacing
-description: 网文节奏与结构工程。当用户需要设计开篇、规划章节结构、编排高潮、设置断章钩子、控制字数节奏时触发。覆盖黄金三章/黄金一章模板、30+种断章钩子技法、多幕式结构、高潮编排与密度控制。
+name: 章节节奏与结构
+description: 规划开篇、章节结构、高潮密度和断章钩子；适合大纲与初稿阶段，不负责人物设定或文字润色。
 license: MIT
 compatibility: opencode
 metadata:
@@ -11,6 +11,8 @@ manifest:
   compatibility: native
   enabled: true
   priority: 7
+  genres:
+    - general
   stages:
     - outline
     - draft

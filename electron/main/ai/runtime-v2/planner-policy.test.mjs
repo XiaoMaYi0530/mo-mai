@@ -41,6 +41,7 @@ test('普通项目任务限制扩读，但不强制分批', () => {
   assert.equal(plan.maxReadToolCalls, 6)
   assert.equal(plan.maxSearchToolCalls, 3)
   assert.ok(plan.contextProviders.includes('project-digest'))
+  assert.ok(plan.contextProviders.includes('style-fingerprint'))
 })
 
 test('人物修改只预载明确相关资料域，不再把全部项目模块塞入提示词', () => {
@@ -58,4 +59,18 @@ test('人物修改只预载明确相关资料域，不再把全部项目模块�
   assert.ok(plan.contextProviders.includes('organizations'))
   assert.ok(!plan.contextProviders.includes('worldview'))
   assert.ok(!plan.contextProviders.includes('outline'))
+})
+
+test('全局大纲批量修改允许单批暂存八项', () => {
+  const plan = createRuntimePlan({
+    surface,
+    request: {
+      sessionId: 'session-1',
+      surface,
+      userMessage: '按照刚才的方案调整第二卷大纲，合并重复节点并补齐剩余节点'
+    }
+  })
+
+  assert.equal(plan.intent, 'entity-edit')
+  assert.equal(plan.maxStageChanges, 8)
 })

@@ -1,9 +1,9 @@
 import type { LanguageModel } from 'ai'
 import type { AppSettings } from './shared-types'
-import { isAnthropicProtocol, isCodexCliProvider, resolveAiProviderProtocol } from '@shared/ai-provider-catalog'
-import { createProxyFetch } from './proxy-fetch'
-import { createProviderTransportFetch } from './sse'
-import { createProtocolModel } from './protocol-adapter'
+import { isAnthropicProtocol, isCodexCliProvider, resolveAiProviderProtocol } from '../../shared/ai-provider-catalog.ts'
+import { createProxyFetch } from './proxy-fetch.ts'
+import { createProviderTransportFetch } from './sse.ts'
+import { createProtocolModel } from './protocol-adapter.ts'
 
 const ANTHROPIC_PROMPT_CACHE = {
   type: 'ephemeral' as const,

@@ -81,3 +81,35 @@ test('不能用其他会话的轮次作为截断锚点', () => {
   assert.throws(() => conversation.truncateFrom(b.id, turn.id), /找不到要撤回/)
   assert.equal(conversation.listTurns(a.id).length, 1)
 })
+
+test('模糊追问只继承最近一轮成功完成的 Skill 阶段', () => {
+  const db = createDatabase()
+  const conversation = new ConversationManager(db)
+  const session = conversation.createSession({ projectId: 'project-1', surfaceId: 'global-page', title: '阶段继承' })
+
+  const outlineTurn = conversation.createTurn({ sessionId: session.id, userMessage: '调整大纲' })
+  conversation.upsertTurnState({
+    turnId: outlineTurn.id,
+    sessionId: session.id,
+    phase: 'done',
+    planJson: JSON.stringify({ intent: 'entity-edit', skillStageId: 'outline' }),
+    ledgerJson: '{}',
+    resumable: false
+  })
+  assert.equal(conversation.getLatestCompletedSkillStage(session.id), undefined)
+
+  conversation.updateTurnStatus(outlineTurn.id, 'done', '已完成')
+  assert.equal(conversation.getLatestCompletedSkillStage(session.id), 'outline')
+
+  const failedDraftTurn = conversation.createTurn({ sessionId: session.id, userMessage: '开始写正文' })
+  conversation.upsertTurnState({
+    turnId: failedDraftTurn.id,
+    sessionId: session.id,
+    phase: 'done',
+    planJson: JSON.stringify({ intent: 'edit', skillStageId: 'draft' }),
+    ledgerJson: '{}',
+    resumable: false
+  })
+  conversation.updateTurnStatus(failedDraftTurn.id, 'error', '失败')
+  assert.equal(conversation.getLatestCompletedSkillStage(session.id), 'outline')
+})

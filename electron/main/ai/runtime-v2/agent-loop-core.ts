@@ -28,7 +28,7 @@ import type { Tool } from '../agent/tools/types'
 import type { RunAgentParams, RunAgentResult } from '../agent/run-agent'
 import type { ConversationManager } from './conversation-manager'
 import type { StagedChangesStore } from './staged-changes-store'
-import { formatUnknownError } from '../error-message'
+import { formatUnknownError } from '../error-message.ts'
 
 export interface AgentLoopRunOptions {
   session: AssistantSession

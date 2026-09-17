@@ -53,3 +53,25 @@ test('项目小结从源数据派生进度、后续大纲和约束索引', () =>
   assert.match(digest, /【等级规则】/)
   assert.match(digest, /自动派生的小结/)
 })
+
+test('仅有空白章节时仍把对应大纲视为待创作', () => {
+  const source = {
+    id: 'project-1', title: '空白骨架', genre: '玄幻', targetPlatform: '',
+    wordCount: '', novelLength: 'long', lastEdited: '', cover: '', coverHistory: [],
+    writingStylePresetId: '', writingStylePrompt: '', novelWorkflowStages: [], projectSkills: [],
+    skillPolicy: { mode: 'auto', skillIds: [] }, chapterAssistantTemplates: [], selectedReferenceWorkIds: []
+  }
+  const digest = buildProjectDigest({
+    project: source,
+    workspace: {
+      worldviewEntries: [], characters: [], organizations: [], characterRelationships: [], organizationMemberships: [], inspirationEntries: [],
+      outlineVolumes: [{ id: 'v1', title: '第一卷', wordTarget: '', summary: '', workflowDocuments: [] }],
+      outlineItems: [{ id: 'o1', volumeId: 'v1', title: '首次冲突', wordTarget: '', conflict: '遭遇强敌', summary: '主角第一次迎战', status: 'planned', sortOrder: 1 }],
+      chapters: [{ id: 'c1', outlineItemId: 'o1', volumeId: 'v1', title: '第一章', summary: '', status: 'draft', wordTarget: '', content: '' }],
+      chapterVersions: [], messages: [], globalAssistantSessions: [], activeGlobalAssistantSessionId: '', aiRuns: [], workflowDocuments: [], plotThreads: []
+    },
+    knowledgeDocuments: []
+  })
+  assert.match(digest, /接下来尚未成章的大纲/)
+  assert.match(digest, /首次冲突/)
+})

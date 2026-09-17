@@ -30,6 +30,10 @@ import {
 import { useAppStore } from '@/stores/app'
 import { useBatchImport } from '@/composables/useBatchImport'
 import BatchImportModal from './BatchImportModal.vue'
+import ReferenceProjectBlueprintModal from './ReferenceProjectBlueprintModal.vue'
+import { buildStyleFingerprintSample } from '@/features/knowledge/styleFingerprint'
+import { buildDeepAnalysisSample } from '@/features/knowledge/deepAnalysisSampling'
+import { buildReferenceDeepAnalysisPlan } from '@shared/reference-deep-analysis'
 
 const appStore = useAppStore()
 const dialog = useDialog()
@@ -38,6 +42,13 @@ const { openModal } = useBatchImport()
 
 const keyword = ref('')
 const selectedDocument = ref<KnowledgeDocumentView | null>(null)
+const blueprintAsset = ref<ReferenceAssetLibrary | null>(null)
+const blueprintVisible = computed({
+  get: () => Boolean(blueprintAsset.value),
+  set: (value: boolean) => {
+    if (!value) blueprintAsset.value = null
+  }
+})
 
 const allState = computed(() => buildKnowledgeCenterState(appStore.knowledgeDocuments))
 const referenceAssets = computed(() =>
@@ -91,6 +102,10 @@ function openReferenceAsset(asset: ReferenceAssetLibrary): void {
   }
 }
 
+function openBlueprintBuilder(asset: ReferenceAssetLibrary): void {
+  blueprintAsset.value = asset
+}
+
 function removeReferenceAsset(asset: ReferenceAssetLibrary): void {
   dialog.warning({
     title: '删除参考资产',
@@ -125,9 +140,7 @@ function removeKnowledgeDocument(documentView: KnowledgeDocumentView): void {
 const deepAnalyzingAssetId = ref<string | null>(null)
 const fingerprintExtractingAssetId = ref<string | null>(null)
 
-const SOURCE_TEXT_CHAR_CAP = 30_000
-
-function buildDeepAnalyzeSourceText(asset: ReferenceAssetLibrary): string {
+function buildDeepAnalyzeFallbackText(asset: ReferenceAssetLibrary): string {
   const chunks = appStore.knowledgeDocuments
     .filter((doc) => doc.sourceType === 'reference-chunk' && asset.relatedDocumentIds.includes(doc.id))
     .map((doc) => ({
@@ -141,48 +154,69 @@ function buildDeepAnalyzeSourceText(asset: ReferenceAssetLibrary): string {
     return asset.primaryDocument?.document.content ?? ''
   }
 
-  let acc = ''
-  for (const chunk of chunks) {
-    const piece = `\n\n【${chunk.label}】\n${chunk.text}`
-    if (acc.length + piece.length > SOURCE_TEXT_CHAR_CAP) {
-      acc += `\n\n[...剩余 ${chunks.length - chunks.indexOf(chunk)} 段已超出本次分析上限，本次只对前段拆解。]`
-      break
-    }
-    acc += piece
-  }
-  return acc.trim()
+  return chunks.map((chunk) => `【${chunk.label}】\n${chunk.text}`).join('\n\n')
 }
 
 async function handleAiDeepAnalyze(asset: ReferenceAssetLibrary): Promise<void> {
-  if (deepAnalyzingAssetId.value) {
+  const taskKey = `reference-deep-analyze:${asset.id}`
+  if (deepAnalyzingAssetId.value || appStore.isAiTaskRunning(taskKey)) {
     message.info('上一次深度拆书还在进行中，请稍候。')
     return
   }
 
-  const sourceText = buildDeepAnalyzeSourceText(asset)
-  if (!sourceText.trim()) {
-    message.error('找不到该参考作品的原文片段，无法进行深度拆书。')
+  const assetDocuments = appStore.knowledgeDocuments.filter((document) => asset.relatedDocumentIds.includes(document.id))
+  const plan = buildReferenceDeepAnalysisPlan(assetDocuments)
+  const targetDimensionIds = plan.targetDimensionIds.length
+    ? plan.targetDimensionIds
+    : plan.coverage.completedDimensionIds
+  const novelResult = await window.characterArc.readReferenceNovelText(asset.id)
+  const rawText = novelResult.success && novelResult.content
+    ? novelResult.content
+    : buildDeepAnalyzeFallbackText(asset)
+  const sample = buildDeepAnalysisSample(rawText, targetDimensionIds)
+  if (!sample.text.trim()) {
+    message.error(novelResult.error ?? '找不到该参考作品的原文片段，无法进行深度拆书。')
     return
   }
 
   deepAnalyzingAssetId.value = asset.id
-  const loading = message.loading(`AI 正在深度拆解《${asset.title}》，可能需要 1-3 分钟…`, { duration: 0 })
+  const actionLabel = plan.coverage.completedCount > 0 && !plan.coverage.complete ? '继续深度拆解' : '深度拆解'
+  const loading = message.loading(`AI 正在${actionLabel}《${asset.title}》，可能需要 1-3 分钟…`, { duration: 0 })
+  let clientTaskId = ''
   try {
-    const response = await window.characterArc.generateAi(JSON.parse(JSON.stringify({
-      task: 'reference-deep-analyze',
-      settings: appStore.appSettings,
-      context: {
-        referenceTitle: asset.title,
-        referenceFileName: asset.fileName,
-        referenceGenre: asset.topKeywords.slice(0, 3).join('、'),
-        sourceText
-      }
-    })))
+    const response = await appStore.runTrackedAiTask({
+      key: taskKey,
+      kind: 'reference',
+      label: `${actionLabel}《${asset.title}》`,
+      description: sample.coverageLabel,
+      panel: 'deconstruction',
+      onCancel: () => { if (clientTaskId) void window.characterArc.cancelAiTask(clientTaskId) }
+    }, async () => {
+      clientTaskId = appStore.getClientTaskId() ?? ''
+      const response = await window.characterArc.generateAi(JSON.parse(JSON.stringify({
+        task: 'reference-deep-analyze',
+        clientKey: taskKey,
+        clientTaskId,
+        settings: appStore.appSettings,
+        context: {
+          referenceWorkId: asset.id,
+          referenceTitle: asset.title,
+          referenceFileName: asset.fileName,
+          referenceGenre: asset.topKeywords.slice(0, 3).join('、'),
+          deepAnalysisPlan: plan.promptSummary,
+          deepAnalysisTargetDimensionIds: targetDimensionIds,
+          deepAnalysisSourceCoverage: sample.coverageLabel,
+          sourceText: sample.text
+        }
+      })))
+      if (!response.success) throw new Error(response.error ?? 'AI 深度拆书失败')
+      return response
+    })
 
     if (!response.success) {
       throw new Error(response.error ?? 'AI 深度拆书失败')
     }
-    message.success(`已完成《${asset.title}》深度拆书，新增的知识文档稍后会出现在列表中。`)
+    message.success(`《${asset.title}》本轮拆书已保存；未覆盖维度可继续补充，不会重复分析已完成内容。`)
   } catch (error) {
     message.error(error instanceof Error ? error.message : 'AI 深度拆书失败')
   } finally {
@@ -192,7 +226,8 @@ async function handleAiDeepAnalyze(asset: ReferenceAssetLibrary): Promise<void> 
 }
 
 async function handleStyleFingerprintExtract(asset: ReferenceAssetLibrary): Promise<void> {
-  if (fingerprintExtractingAssetId.value) {
+  const taskKey = `style-fingerprint-extract:${asset.id}`
+  if (fingerprintExtractingAssetId.value || appStore.isAiTaskRunning(taskKey)) {
     message.info('上一次风格指纹提取还在进行中，请稍候。')
     return
   }
@@ -203,21 +238,37 @@ async function handleStyleFingerprintExtract(asset: ReferenceAssetLibrary): Prom
     return
   }
 
-  const sourceText = novelResult.content.length > 80000 ? novelResult.content.slice(0, 80000) : novelResult.content
+  const sourceText = buildStyleFingerprintSample(novelResult.content)
 
   fingerprintExtractingAssetId.value = asset.id
   const loading = message.loading(`AI 正在从原文提取《${asset.title}》的风格指纹（${Math.round(sourceText.length / 10000)}万字样本），可能需要 2-4 分钟…`, { duration: 0 })
+  let clientTaskId = ''
   try {
-    const response = await window.characterArc.generateAi(JSON.parse(JSON.stringify({
-      task: 'style-fingerprint-extract',
-      settings: appStore.appSettings,
-      context: {
-        referenceTitle: asset.title,
-        referenceFileName: asset.fileName,
-        referenceGenre: asset.topKeywords.slice(0, 3).join('、'),
-        sourceText
-      }
-    })))
+    const response = await appStore.runTrackedAiTask({
+      key: taskKey,
+      kind: 'reference',
+      label: `提取《${asset.title}》风格指纹`,
+      description: `均匀抽取约 ${Math.round(sourceText.length / 10000)} 万字样本`,
+      panel: 'deconstruction',
+      onCancel: () => { if (clientTaskId) void window.characterArc.cancelAiTask(clientTaskId) }
+    }, async () => {
+      clientTaskId = appStore.getClientTaskId() ?? ''
+      const response = await window.characterArc.generateAi(JSON.parse(JSON.stringify({
+        task: 'style-fingerprint-extract',
+        clientKey: taskKey,
+        clientTaskId,
+        settings: appStore.appSettings,
+        context: {
+          referenceWorkId: asset.id,
+          referenceTitle: asset.title,
+          referenceFileName: asset.fileName,
+          referenceGenre: asset.topKeywords.slice(0, 3).join('、'),
+          sourceText
+        }
+      })))
+      if (!response.success) throw new Error(response.error ?? 'AI 风格指纹提取失败')
+      return response
+    })
 
     if (!response.success) {
       throw new Error(response.error ?? 'AI 风格指纹提取失败')
@@ -264,6 +315,19 @@ function resolveAssetDocuments(asset: ReferenceAssetLibrary): KnowledgeDocumentV
   return allState.value.documents
     .filter((item) => asset.relatedDocumentIds.includes(item.document.id))
     .sort((left, right) => compareReferenceAssetDocuments(left.document, right.document))
+}
+
+function resolveFingerprintDocument(asset: ReferenceAssetLibrary): KnowledgeDocumentView | null {
+  return resolveAssetDocuments(asset).find((item) => (
+    String(item.document.metadata?.documentKind ?? '') === 'author-fingerprint'
+    || /作者风格指纹/u.test(item.document.title)
+    || /author_fingerprint/u.test(item.document.content)
+  )) ?? null
+}
+
+function openFingerprintDocument(asset: ReferenceAssetLibrary): void {
+  const documentView = resolveFingerprintDocument(asset)
+  if (documentView) openDocument(documentView)
 }
 </script>
 
@@ -331,7 +395,33 @@ function resolveAssetDocuments(asset: ReferenceAssetLibrary): KnowledgeDocumentV
           <n-tag v-if="asset.chunkCount" size="tiny" :bordered="false">分块 {{ asset.chunkCount }}</n-tag>
           <n-tag v-if="asset.chapterCount > 0" size="tiny" :bordered="false">{{ asset.chapterCount }} 章</n-tag>
           <n-tag v-if="asset.characterCount > 0" size="tiny" :bordered="false">{{ asset.characterCount.toLocaleString() }} 字</n-tag>
+          <n-tag
+            size="tiny"
+            :bordered="false"
+            :type="fingerprintExtractingAssetId === asset.id ? 'warning' : resolveFingerprintDocument(asset) ? 'success' : 'default'"
+          >
+            {{ fingerprintExtractingAssetId === asset.id ? '风格指纹提取中' : resolveFingerprintDocument(asset) ? '风格指纹已提取' : '风格指纹未提取' }}
+          </n-tag>
           <span class="asset-date">{{ asset.updatedAtLabel }}</span>
+        </div>
+
+        <div class="asset-coverage">
+          <div class="asset-coverage-heading">
+            <strong>深度拆书覆盖率</strong>
+            <span>{{ asset.deepAnalysisCoverage.completedCount }}/{{ asset.deepAnalysisCoverage.totalCount }} · {{ asset.deepAnalysisCoverage.percent }}%</span>
+          </div>
+          <div class="asset-coverage-track">
+            <i :style="{ width: `${asset.deepAnalysisCoverage.percent}%` }" />
+          </div>
+          <p>
+            <template v-if="asset.deepAnalysisCoverage.complete">全部维度已完成，可直接用于创建小说。</template>
+            <template v-else-if="asset.deepAnalysisCoverage.creationReady">
+              已具备创建骨架条件；待补：{{ asset.deepAnalysisCoverage.missingDimensions.map((item) => item.label).join('、') }}
+            </template>
+            <template v-else>
+              基础拆书可创建；深度分析建议先补：{{ asset.deepAnalysisCoverage.missingDimensions.filter((item) => item.requiredForCreation).map((item) => item.label).join('、') || '核心维度' }}
+            </template>
+          </p>
         </div>
 
         <div v-if="asset.styleRules.length" class="asset-tags">
@@ -347,6 +437,10 @@ function resolveAssetDocuments(asset: ReferenceAssetLibrary): KnowledgeDocumentV
 
         <div class="asset-actions">
           <n-button tertiary type="primary" size="small" @click="openReferenceAsset(asset)">查看主文档</n-button>
+          <n-button type="success" size="small" @click="openBlueprintBuilder(asset)">
+            <template #icon><Sparkles :size="14" /></template>
+            基于拆书创建小说
+          </n-button>
           <n-button
             type="primary"
             size="small"
@@ -355,7 +449,7 @@ function resolveAssetDocuments(asset: ReferenceAssetLibrary): KnowledgeDocumentV
             @click="handleAiDeepAnalyze(asset)"
           >
             <template #icon><Sparkles :size="14" /></template>
-            AI 深度拆书
+            {{ asset.deepAnalysisCoverage.complete ? '重新深度拆书' : asset.deepAnalysisCoverage.completedCount ? '继续深度拆书' : 'AI 深度拆书' }}
           </n-button>
           <n-button
             type="warning"
@@ -365,7 +459,16 @@ function resolveAssetDocuments(asset: ReferenceAssetLibrary): KnowledgeDocumentV
             @click="handleStyleFingerprintExtract(asset)"
           >
             <template #icon><Sparkles :size="14" /></template>
-            风格指纹提取
+            {{ resolveFingerprintDocument(asset) ? '重新提取指纹' : '风格指纹提取' }}
+          </n-button>
+          <n-button
+            v-if="resolveFingerprintDocument(asset)"
+            tertiary
+            type="warning"
+            size="small"
+            @click="openFingerprintDocument(asset)"
+          >
+            查看指纹
           </n-button>
           <n-button tertiary type="error" size="small" @click="removeReferenceAsset(asset)">删除</n-button>
         </div>
@@ -396,6 +499,7 @@ function resolveAssetDocuments(asset: ReferenceAssetLibrary): KnowledgeDocumentV
 
     <!-- Batch Import Modal -->
     <BatchImportModal />
+    <ReferenceProjectBlueprintModal v-model:show="blueprintVisible" :asset="blueprintAsset" />
 
     <!-- Detail Modal -->
     <n-modal v-model:show="detailVisible">
@@ -554,6 +658,49 @@ function resolveAssetDocuments(asset: ReferenceAssetLibrary): KnowledgeDocumentV
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 10px;
+}
+
+.asset-coverage {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--arc-border);
+  border-radius: 10px;
+  background: var(--arc-bg-weak);
+}
+
+.asset-coverage-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.asset-coverage-heading span,
+.asset-coverage p {
+  color: var(--arc-text-tertiary);
+}
+
+.asset-coverage-track {
+  height: 6px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--arc-border);
+}
+
+.asset-coverage-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--arc-primary);
+  transition: width .2s ease;
+}
+
+.asset-coverage p {
+  margin: 7px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .asset-actions {

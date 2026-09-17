@@ -1,3 +1,5 @@
+import { chapterHtmlToPlainText } from '../../../../shared/chapter-text.ts'
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -7,6 +9,11 @@ function escapeHtml(text: string): string {
 }
 
 export function stripHtmlTags(html: string): string {
+  return chapterHtmlToPlainText(html)
+}
+
+/** 定位编辑片段时不能注入虚拟段落换行，否则纯文本索引无法映射回 HTML。 */
+function stripHtmlForSearch(html: string): string {
   return html
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
@@ -93,7 +100,7 @@ function findPlainTextRange(plain: string, search: string): { start: number; end
 }
 
 export function replaceInHtml(html: string, search: string, replacement: string): string {
-  const plain = stripHtmlTags(html)
+  const plain = stripHtmlForSearch(html)
   const range = findPlainTextRange(plain, search)
   if (!range) {
     throw new Error(`Could not find target text: "${search.slice(0, 50)}..."`)
@@ -114,7 +121,7 @@ export function insertInHtml(
   insertion: string,
   position: 'before' | 'after'
 ): string {
-  const plain = stripHtmlTags(html)
+  const plain = stripHtmlForSearch(html)
   const range = findPlainTextRange(plain, search)
   if (!range) {
     throw new Error(`Could not find anchor text: "${search.slice(0, 50)}..."`)

@@ -1,6 +1,6 @@
 ---
-name: novel-compliance
-description: 网文敏感词规避与合规。当用户需要了解平台审核规则、规避敏感词、确保内容合规、了解违规判定标准时触发。覆盖各平台审核规则、敏感词库、违规内容判定、章节审核流程、2026年法规要求。
+name: 内容合规检查
+description: 检查敏感表达、平台审核风险和违规内容；用于审计与修复，不负责改善文风或设计剧情。
 license: MIT
 compatibility: opencode
 metadata:
@@ -11,6 +11,9 @@ manifest:
   compatibility: native
   enabled: true
   priority: 4
+  genres:
+    - general
+  exclusiveGroup: content-audit
   stages:
     - draft
   tasks:

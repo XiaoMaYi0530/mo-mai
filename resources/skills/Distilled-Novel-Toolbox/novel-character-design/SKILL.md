@@ -1,6 +1,6 @@
 ---
-name: novel-character-design
-description: 网文人设与群像工程。当用户需要设计主角性格、塑造配角功能、构建反派魅力、设计人物关系、规划人物弧光时触发。覆盖60+主角性格标签、30+配角功能模型、20+反派塑造模板，以及人物关系范式与弧光设计方法。
+name: 人物与群像设计
+description: 设计核心人物、配角功能、反派动机、人物关系与成长弧光；适合立项和设定阶段，不负责正文润色。
 license: MIT
 compatibility: opencode
 metadata:
@@ -11,6 +11,8 @@ manifest:
   compatibility: native
   enabled: true
   priority: 7
+  genres:
+    - general
   stages:
     - premise
     - setting

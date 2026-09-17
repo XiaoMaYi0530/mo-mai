@@ -5,7 +5,7 @@ import {
   normalizeAiBaseUrl,
   normalizeAiProviderName,
   isCodexCliProvider
-} from '@shared/ai-provider-catalog'
+} from '../../shared/ai-provider-catalog.ts'
 
 /**
  * 根据供应商名称返回其默认 Base URL 和默认模型（当前保持为空）。
@@ -116,6 +116,10 @@ export function resolveMaxTokens(task?: AiTaskPayload): number | undefined {
   switch (task?.task) {
     case 'project-bootstrap':
       return 1500
+    case 'story-concept-options':
+      return 6000
+    case 'reference-project-blueprint':
+      return 12000
     case 'chapter-analysis':
     case 'reference-style-chunk':
     case 'reference-style-analysis':

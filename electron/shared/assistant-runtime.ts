@@ -29,12 +29,16 @@ export type SkillUseMode = 'auto' | 'only' | 'off'
 export interface SkillUsePolicy {
   mode: SkillUseMode
   skillIds: string[]
+  /** 通过快捷组合选择时保留组合语义；手动选择 Skill 时为空。 */
+  presetId?: string
 }
 
 export interface SkillExecutionReceiptItem {
   id: string
   name: string
-  state: 'candidate' | 'injected' | 'loaded'
+  state: 'candidate' | 'injected' | 'loaded' | 'skipped' | 'failed'
+  /** 本轮选择、跳过或回退的原因，供预览和执行后回执展示。 */
+  reason?: string
 }
 
 export const DEFAULT_SKILL_USE_POLICY: SkillUsePolicy = {
@@ -45,12 +49,13 @@ export const DEFAULT_SKILL_USE_POLICY: SkillUsePolicy = {
 /** 兼容旧项目与不可信 IPC 输入，统一收敛为稳定的 Skill 策略。 */
 export function normalizeSkillUsePolicy(value: unknown): SkillUsePolicy {
   if (!value || typeof value !== 'object') return { ...DEFAULT_SKILL_USE_POLICY }
-  const raw = value as { mode?: unknown; skillIds?: unknown }
+  const raw = value as { mode?: unknown; skillIds?: unknown; presetId?: unknown }
   const mode: SkillUseMode = raw.mode === 'only' || raw.mode === 'off' ? raw.mode : 'auto'
   const skillIds = Array.isArray(raw.skillIds)
     ? [...new Set(raw.skillIds.map((id) => String(id ?? '').trim()).filter(Boolean))]
     : []
-  return { mode, skillIds }
+  const presetId = typeof raw.presetId === 'string' ? raw.presetId.trim() : ''
+  return presetId ? { mode, skillIds, presetId } : { mode, skillIds }
 }
 
 /**
@@ -254,6 +259,7 @@ export type ContextProviderId =
   | 'knowledge'
   | 'workflow-documents'
   | 'skill-index'
+  | 'style-fingerprint'
 
 /**
  * 上下文切片：由 ContextProvider 产出，参与最终 system prompt 拼装。
@@ -389,6 +395,8 @@ export interface TurnSendRequest {
   resumeOfTurnId?: string
   /** 当前对话/本轮覆盖后的 Skill 使用策略。缺省时采用项目默认值。 */
   skillPolicy?: SkillUsePolicy
+  /** Runtime 内部补入的上一轮成功 Skill 阶段；渲染进程不需要填写。 */
+  previousSkillStageId?: 'reference' | 'premise' | 'setting' | 'outline' | 'draft'
 }
 
 /** 发送前预览允许尚未创建会话；此时 Runtime 使用临时会话计算计划。 */

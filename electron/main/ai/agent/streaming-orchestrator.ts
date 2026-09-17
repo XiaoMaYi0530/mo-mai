@@ -17,13 +17,7 @@ import { getRecentSkillUsage, formatSkillUsageHint, recordSkillUsage } from './s
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { formatAiErrorMessage } from '../error-message'
-
-/** 去掉 SKILL.md 开头的 YAML frontmatter 块（--- ... ---）。 */
-function stripSkillFrontmatter(content: string): string {
-  const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/)
-  if (!match) return content
-  return content.slice(match[0].length)
-}
+import { buildSkillContentExcerpt } from '../skills/content-slice'
 
 function resolveStreamingAgentMaxSteps(taskName: AiTaskPayload['task']): number | undefined {
   if (taskName === 'chapter-first-draft') {
@@ -102,7 +96,7 @@ export async function runStreamingAgentTask(
 
   const requiredSkillBlock = requiredSkillDefs.length
     ? `\n\n## ${skillPolicy.mode === 'only' ? '本轮仅使用的 SKILLS（不得混用其他 Skill）' : '强制生效的 SKILLS'}\n\n${requiredSkillDefs.map((s) => {
-        const body = stripSkillFrontmatter(s.content).trim().slice(0, 2000)
+        const body = buildSkillContentExcerpt(s, task, 2400)
         return `### ${s.name}\n${body}`
       }).join('\n\n')}`
     : ''
@@ -112,7 +106,7 @@ export async function runStreamingAgentTask(
   if (task.task === 'chapter-first-draft' && optionalSkillDefs.length > 0) {
     const refParts: string[] = []
     for (const s of optionalSkillDefs) {
-      const body = stripSkillFrontmatter(s.content).trim().slice(0, 1500)
+      const body = buildSkillContentExcerpt(s, task, 1800)
       if (body) {
         refParts.push(`### ${s.name}\n${body}`)
       }
@@ -264,6 +258,7 @@ export async function runStreamingAgentTask(
     listSkills: () => getAllSkills(projectId || undefined),
     resolveSkillEnabled: (skill) => skillEnabledOverrides?.get(skill.id) ?? skill.enabled,
     allowSkillUse: (skill) => allowedSkillIds.has(skill.id),
+    resolveSkillLoadContent: (skill) => buildSkillContentExcerpt(skill, task),
     allowScriptExecution: (skill) => skill.scope === 'builtin'
   })
 

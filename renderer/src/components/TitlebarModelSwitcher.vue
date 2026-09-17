@@ -105,6 +105,8 @@ const taskLabelMap: Record<string, string> = {
   'reference-style-chunk': '风格拆解',
   'reference-style-analysis': '风格分析',
   'style-fingerprint-extract': '风格指纹提取',
+  'story-concept-options': '新书创意发散',
+  'reference-project-blueprint': '拆书转原创骨架',
   'workflow-documents': '设定导出',
   'plot-thread-detect': '伏笔检测',
   'premise-enhance': '小说简介优化',

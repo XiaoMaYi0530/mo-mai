@@ -1,6 +1,10 @@
 import type { Tool } from '../../agent/tools/types'
 import type { ChapterEdit } from '../../agent/tools/chapter-data-access'
 import type { StagedChangesStore } from '../staged-changes-store'
+import {
+  assessChapterReplacementRisk,
+  hasWholeChapterEditIntent
+} from '../../../../shared/chapter-edit-safety.ts'
 
 export interface StageChapterSummaryItem {
   id: string
@@ -38,6 +42,8 @@ export interface StageChapterEditToolDeps {
   dataAccess: StageChapterEditDataAccess
   /** Surface 的"当前激活章节"；用户没传 chapter_id 时兜底。 */
   currentChapterId?: string
+  /** 用于在模型误选 replace 时识别用户真实的整章意图。 */
+  originalUserPrompt?: string
 }
 
 const CHINESE_DIGITS: Record<string, number> = {
@@ -175,12 +181,42 @@ export function makeStageChapterEditToolCore(deps: StageChapterEditToolDeps): To
       }
 
       try {
-        const computed = await deps.dataAccess.computeChapterEdit(
+        const baseContent = buffer.get(chapterId)
+        let effectiveOperation = operation
+        let computed = await deps.dataAccess.computeChapterEdit(
           deps.projectId,
           chapterId,
           { operation, search, content, position },
-          buffer.get(chapterId)
+          baseContent
         )
+
+        if (operation === 'replace' && search) {
+          const risk = assessChapterReplacementRisk({
+            oldHtml: computed.oldContent,
+            newHtml: computed.newContent,
+            search,
+            replacement: content
+          })
+          if (risk.unsafe) {
+            if (hasWholeChapterEditIntent(deps.originalUserPrompt ?? '')) {
+              effectiveOperation = 'replace_all'
+              computed = await deps.dataAccess.computeChapterEdit(
+                deps.projectId,
+                chapterId,
+                { operation: 'replace_all', content, position },
+                baseContent
+              )
+            } else {
+              return {
+                content: [
+                  '疑似把整章内容用于局部替换，本次没有进入暂存区。',
+                  '如果要润色或重写整章，请使用 replace_all；如果只修改局部，请缩短 replacement，或扩大 search 到实际要替换的完整段落。'
+                ].join('\n'),
+                isError: true
+              }
+            }
+          }
+        }
         buffer.set(chapterId, computed.newContent)
 
         const change = deps.stagedStore.add({
@@ -199,6 +235,7 @@ export function makeStageChapterEditToolCore(deps: StageChapterEditToolDeps): To
 
         return {
           content: [
+            ...(effectiveOperation !== operation ? ['检测到明确的整章修改意图，已自动按整章替换重新生成提案。'] : []),
             `已暂存章节修改（change_id=${change.id}）：${computed.preview}。`,
             `正文尚未写回；用户在暂存区确认后才会生效。请不要将此描述为"已修复"或"已写入"。`
           ].join('\n')

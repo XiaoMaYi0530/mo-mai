@@ -1,4 +1,5 @@
 import type { AiTaskName } from '../shared-types'
+import type { SkillGenreId } from '../../../shared/skill-genres'
 
 /** Skill 分类：市场调研、文本分析、写作、润色、封面、工具 */
 export type SkillCategory = 'market' | 'analysis' | 'writing' | 'polish' | 'cover' | 'tool'
@@ -26,6 +27,10 @@ export type SkillManifest = {
   triggers: string[]
   priority: number
   references: SkillReferenceRule[]
+  /** 适用题材；`general` 表示通用，不限制项目题材。 */
+  genres: SkillGenreId[]
+  /** 同组 Skill 在自动模式下一次只选一个，避免重复或互相冲突的指令。 */
+  exclusiveGroup?: string
   /**
    * 标记为 required 的 skill 在 agent 路径里会被直接注入 system prompt（不依赖模型自己决定是否加载），
    * 在传统路径里会无条件进入候选池（即使 score 为 0 也不会被过滤掉）。
@@ -67,6 +72,7 @@ export type SkillSelection = {
     stage: number
     trigger: number
     narrative: number
+    genre: number
     length: number
     priority: number
   }
@@ -87,4 +93,6 @@ export type SkillScanEntry = {
   referencesCount: number
   enabled: boolean
   stageIds: SkillStageId[]
+  /** 适用题材；旧 Skill 未声明时扫描层会补为 general。 */
+  genreIds: SkillGenreId[]
 }

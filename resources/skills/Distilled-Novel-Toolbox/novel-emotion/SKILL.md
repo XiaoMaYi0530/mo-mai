@@ -1,6 +1,6 @@
 ---
-name: novel-emotion
-description: 网文情绪与代入感设计。当用户需要设计情绪曲线、增强代入感、触发共情、管理读者期待、营造沉浸感时触发。覆盖情绪色彩轮盘、20+共情触发器、期待感管理、先抑后扬阶梯式情绪曲线、感官细节沉浸技术。
+name: 情绪与代入感
+description: 设计章节情绪曲线、共情触发点、期待管理和感官沉浸；适合正文创作与定向修复。
 license: MIT
 compatibility: opencode
 metadata:
@@ -11,6 +11,8 @@ manifest:
   compatibility: native
   enabled: true
   priority: 6
+  genres:
+    - general
   stages:
     - draft
   tasks:

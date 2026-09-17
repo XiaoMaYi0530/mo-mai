@@ -26,7 +26,8 @@ import {
   filterKnowledgeDocumentsForProject,
   isProjectKnowledgeSource,
   normalizeKnowledgeDocumentScope,
-  replaceKnowledgeDocumentsBySource
+  replaceKnowledgeDocumentsBySource,
+  upsertReferenceAnalysisDocuments
 } from '@/features/knowledge/knowledgeCenter'
 import {
   buildStarterChapter,
@@ -50,7 +51,10 @@ import {
 } from '@/features/workspace/storeHelpers'
 import {
   AI_TASK_RETENTION_MS,
+  AI_TASK_STORAGE_KEY,
   applyExternalAiTaskEvent,
+  restoreAiTaskRuns,
+  serializeAiTaskRuns,
   type AiTaskRun,
   type AiTaskRunInput
 } from '@/features/ai/taskRegistry'
@@ -115,8 +119,10 @@ interface ProjectWorkspacePayload {
     novelWorkflowStages?: ProjectSummary['novelWorkflowStages']
     projectSkills?: ProjectSummary['projectSkills']
     skillPolicy?: ProjectSummary['skillPolicy']
+    skillPresetBindings?: ProjectSummary['skillPresetBindings']
     targetPlatform?: string
     selectedReferenceWorkIds?: ProjectSummary['selectedReferenceWorkIds']
+    styleFingerprintBinding?: ProjectSummary['styleFingerprintBinding']
     coverHistory?: ProjectSummary['coverHistory']
   }
   worldviewEntries?: WorldviewEntry[]
@@ -334,7 +340,16 @@ export const useAppStore = defineStore('app', () => {
    *   2. 给全局进度面板提供数据源，让用户知道 AI 正在跑什么、跑了多久。
    *   3. 天然防重复点击：同 key 任务已在运行时再次点击会被拒绝。
    */
-  const aiTaskRuns = ref<Map<string, AiTaskRun>>(new Map())
+  const aiTaskRuns = ref<Map<string, AiTaskRun>>(restoreAiTaskRuns(
+    typeof window === 'undefined' ? null : window.localStorage.getItem(AI_TASK_STORAGE_KEY)
+  ))
+  watch(aiTaskRuns, (runs) => {
+    try {
+      window.localStorage.setItem(AI_TASK_STORAGE_KEY, serializeAiTaskRuns(runs))
+    } catch {
+      // 本地存储不可用时仅影响重启恢复，不阻塞创作任务。
+    }
+  })
   /** 流程面板当前激活的分卷（回退到第一个分卷） */
   const activeWorkflowVolume = computed(
     () => outlineVolumes.value.find((v) => v.id === activeWorkflowVolumeId.value) ?? outlineVolumes.value[0]
@@ -411,9 +426,15 @@ export const useAppStore = defineStore('app', () => {
           metadata: draft.metadata && typeof draft.metadata === 'object' ? draft.metadata as Record<string, unknown> : {},
           createdAt: String(draft.createdAt ?? '').trim() || now,
           updatedAt: String(draft.updatedAt ?? '').trim() || now
-        }))
+      }))
       if (documents.length > 0) {
-        mergeKnowledgeDocuments(documents)
+        const taskName = String((payload.meta as { task?: string }).task ?? '')
+        mergeKnowledgeDocuments(
+          documents,
+          taskName === 'reference-deep-analyze' || taskName === 'style-fingerprint-extract'
+            ? 'reference-analysis'
+            : 'replace-source'
+        )
       }
     }
 
@@ -796,8 +817,10 @@ export const useAppStore = defineStore('app', () => {
       novelWorkflowStages: payload.project?.novelWorkflowStages ?? createDefaultNovelWorkflowStages(),
       projectSkills: payload.project?.projectSkills ?? [],
       skillPolicy: payload.project?.skillPolicy ?? { mode: 'auto', skillIds: [] },
+      skillPresetBindings: payload.project?.skillPresetBindings ?? {},
       targetPlatform: payload.project?.targetPlatform?.trim() || '',
       selectedReferenceWorkIds: payload.project?.selectedReferenceWorkIds ?? [],
+      styleFingerprintBinding: payload.project?.styleFingerprintBinding ?? { version: 1, primaryReferenceWorkId: '', primaryWeight: 100, auxiliary: [] },
       coverHistory: payload.project?.coverHistory ?? []
     }
 
@@ -1173,8 +1196,10 @@ export const useAppStore = defineStore('app', () => {
       novelWorkflowStages: payload.project.novelWorkflowStages ?? createDefaultNovelWorkflowStages(),
       projectSkills: payload.project.projectSkills ?? [],
       skillPolicy: payload.project.skillPolicy ?? { mode: 'auto', skillIds: [] },
+      skillPresetBindings: payload.project.skillPresetBindings ?? {},
       targetPlatform: payload.project.targetPlatform?.trim() || '',
       selectedReferenceWorkIds: payload.project.selectedReferenceWorkIds ?? [],
+      styleFingerprintBinding: payload.project.styleFingerprintBinding ?? { version: 1, primaryReferenceWorkId: '', primaryWeight: 100, auxiliary: [] },
       coverHistory: payload.project.coverHistory ?? []
     }))
 
@@ -1263,10 +1288,16 @@ export const useAppStore = defineStore('app', () => {
               payload.novelWorkflowStages !== undefined ? payload.novelWorkflowStages : project.novelWorkflowStages,
             projectSkills: payload.projectSkills !== undefined ? payload.projectSkills : project.projectSkills,
             skillPolicy: payload.skillPolicy !== undefined ? payload.skillPolicy : project.skillPolicy,
+            skillPresetBindings: payload.skillPresetBindings !== undefined
+              ? payload.skillPresetBindings
+              : project.skillPresetBindings,
             targetPlatform: payload.targetPlatform !== undefined ? payload.targetPlatform.trim() : project.targetPlatform,
             selectedReferenceWorkIds: payload.selectedReferenceWorkIds !== undefined
               ? payload.selectedReferenceWorkIds
               : project.selectedReferenceWorkIds,
+            styleFingerprintBinding: payload.styleFingerprintBinding !== undefined
+              ? payload.styleFingerprintBinding
+              : project.styleFingerprintBinding,
             coverHistory: payload.coverHistory !== undefined ? payload.coverHistory : project.coverHistory
           }
         : project
@@ -1292,7 +1323,10 @@ export const useAppStore = defineStore('app', () => {
     schedulePersist('fast')
   }
 
-  function mergeKnowledgeDocuments(documents: KnowledgeDocument[]): void {
+  function mergeKnowledgeDocuments(
+    documents: KnowledgeDocument[],
+    mode: 'replace-source' | 'reference-analysis' = 'replace-source'
+  ): void {
     const normalizedDocuments = documents
       .filter((document) => document && typeof document.id === 'string' && document.id.trim())
       .map((document) => normalizeKnowledgeDocumentScope({
@@ -1307,10 +1341,9 @@ export const useAppStore = defineStore('app', () => {
         updatedAt: document.updatedAt || document.createdAt || new Date().toISOString()
       }, selectedProjectId.value))
 
-    allKnowledgeDocuments.value = replaceKnowledgeDocumentsBySource(
-      allKnowledgeDocuments.value,
-      normalizedDocuments
-    )
+    allKnowledgeDocuments.value = mode === 'reference-analysis'
+      ? upsertReferenceAnalysisDocuments(allKnowledgeDocuments.value, normalizedDocuments)
+      : replaceKnowledgeDocumentsBySource(allKnowledgeDocuments.value, normalizedDocuments)
     schedulePersist('fast')
   }
 
@@ -1405,9 +1438,21 @@ export const useAppStore = defineStore('app', () => {
     referenceWorks.value = referenceWorks.value.filter((item) => item.id !== trimmedId)
     for (const project of projects.value) {
       const ids = project.selectedReferenceWorkIds ?? []
-      if (ids.includes(trimmedId)) {
+      const binding = project.styleFingerprintBinding
+      const hasBinding = binding.primaryReferenceWorkId === trimmedId
+        || binding.auxiliary.some((item) => item.referenceWorkId === trimmedId)
+      if (ids.includes(trimmedId) || hasBinding) {
+        const remainingAuxiliary = binding.auxiliary.filter((item) => item.referenceWorkId !== trimmedId)
+        const promoted = binding.primaryReferenceWorkId === trimmedId ? remainingAuxiliary.shift() : undefined
+        const nextPrimary = promoted?.referenceWorkId ?? binding.primaryReferenceWorkId
         updateProject(project.id, {
-          selectedReferenceWorkIds: ids.filter((id) => id !== trimmedId)
+          selectedReferenceWorkIds: ids.filter((id) => id !== trimmedId),
+          styleFingerprintBinding: {
+            version: 1,
+            primaryReferenceWorkId: nextPrimary,
+            primaryWeight: remainingAuxiliary.length > 0 ? (promoted?.weight ?? binding.primaryWeight) : 100,
+            auxiliary: remainingAuxiliary
+          }
         })
       }
     }

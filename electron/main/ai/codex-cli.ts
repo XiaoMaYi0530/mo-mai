@@ -4,7 +4,7 @@ import { delimiter, dirname, extname, join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
 import type { AiRunUsage, AppSettings, AiStreamHandlers, PromptPair } from './shared-types'
-import { normalizeProxyUrl } from './proxy-fetch'
+import { normalizeProxyUrl } from './proxy-fetch.ts'
 
 const CODEX_MODEL_DISCOVERY_TIMEOUT_MS = 15_000
 const CODEX_COMMAND_TIMEOUT_MS = 15_000
@@ -164,7 +164,10 @@ function buildCodexPrompt(settings: AppSettings, prompt: PromptPair): string {
 /** 构建只读 Codex exec 参数；后续工具轮次可续接同一会话。Prompt 始终通过 stdin 传入。 */
 export function buildCodexExecArgs(
   settings: AppSettings,
-  options: { resumeSessionId?: string } = {}
+  options: {
+    resumeSessionId?: string
+    reasoningSummary?: 'auto' | 'concise' | 'detailed' | 'none'
+  } = {}
 ): string[] {
   const resumeSessionId = options.resumeSessionId?.trim() ?? ''
   const args = resumeSessionId
@@ -174,6 +177,9 @@ export function buildCodexExecArgs(
   const effort = settings.codexReasoningEffort?.trim().toLowerCase()
   if (effort && effort !== 'default') {
     args.push('-c', `model_reasoning_effort=${JSON.stringify(effort)}`)
+  }
+  if (options.reasoningSummary) {
+    args.push('-c', `model_reasoning_summary=${JSON.stringify(options.reasoningSummary)}`)
   }
   const model = settings.model?.trim()
   if (model && model.toLowerCase() !== 'default') {
@@ -279,7 +285,12 @@ export async function runCodexCli(
   options.signal?.throwIfAborted()
   const command = resolveCodexCommand(settings)
   const resumeSessionId = options.resumeSessionId?.trim() ?? ''
-  const args = [...command.prefixArgs, ...buildCodexExecArgs(settings, { resumeSessionId })]
+  const args = [...command.prefixArgs, ...buildCodexExecArgs(settings, {
+    resumeSessionId,
+    // Codex 默认的 auto 可能只返回加密推理而不给可展示摘要。仅当调用方
+    // 真的订阅推理事件时请求 concise，在保留思考方向的同时控制额外输出。
+    reasoningSummary: options.handlers?.onReasoningDelta ? 'concise' : undefined
+  })]
   const child = spawn(command.program, args, {
     cwd: tmpdir(),
     env: buildCodexEnvironment(settings),

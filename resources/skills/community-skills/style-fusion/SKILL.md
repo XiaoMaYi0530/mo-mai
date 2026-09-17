@@ -1,9 +1,9 @@
 ---
-name: style-fusion
+name: 风格融合指南
 version: 1.0.0
 description: |
-  风格迁移融合创作指南生成。将作者风格指纹精确映射到新作品，
-  生成可执行500+章的融合创作规则集+初始故事状态机（人物/伏笔/关系/细纲）。
+  把已提取的风格指纹映射到原创项目，生成长期可执行的语言与叙事规则；
+  用于立项和设定，不照搬参考作品的具体表达。
 manifest:
   category: writing
   tasks:
@@ -21,6 +21,8 @@ manifest:
     - 立项
     - 风格映射
   priority: 7
+  genres:
+    - general
   required: false
   enabled: true
   compatibility: native

@@ -7,6 +7,7 @@ import { autoSaveOptions } from '@/features/settings/autoSave'
 import { buildProjectWritingStyleContext, writingStylePresets } from '@/features/writingStyles/presets'
 import ProjectArchiveImportModal from '@/components/ProjectArchiveImportModal.vue'
 import ProjectSkillsPanel from '@/components/ProjectSkillsPanel.vue'
+import ProjectStyleFingerprintPanel from '@/components/ProjectStyleFingerprintPanel.vue'
 import { useAppStore } from '@/stores/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
 import type {
@@ -424,6 +425,7 @@ watch(
         </div>
       </n-card>
 
+      <ProjectStyleFingerprintPanel />
       <ProjectSkillsPanel scope="project" />
     </div>
 

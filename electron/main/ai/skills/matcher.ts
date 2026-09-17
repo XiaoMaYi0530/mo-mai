@@ -4,7 +4,14 @@ import { getAllSkills, getEnabledSkills } from './registry'
 import { loadSkillReferences } from './loader'
 import { getTaskHandler } from '../tasks'
 import { matchNarrativeFunction } from './narrative-function-map'
-import { isSkillExplicitlyMentioned, selectSkillCandidates } from './selection-priority'
+import {
+  isSkillAllowedAtStage,
+  isSkillExplicitlyMentioned,
+  resolveAutoSkillLimit,
+  selectSkillCandidates
+} from './selection-priority'
+import { matchSkillGenre } from '../../../shared/skill-genres'
+import { buildSkillContentExcerpt } from './content-slice'
 
 /** 默认最大匹配 skill 数量 */
 const DEFAULT_MAX_SKILLS = 4
@@ -23,6 +30,7 @@ export type ScoreBreakdown = {
   stage: number
   trigger: number
   narrative: number
+  genre: number
   length: number
   priority: number
 }
@@ -52,12 +60,18 @@ export async function pickSkillsFor(
     ? getAllSkills(projectId).filter((skill) => options.enabledOverrides?.get(skill.id) === true)
     : getEnabledSkills(projectId)
   const context = task.context ?? {}
+  const stageId = String(context.stageId ?? '').trim()
 
   if (options.onlySkillIds) {
     const byId = new Map(skills.map((skill) => [skill.id, skill]))
     const selected = options.onlySkillIds
       .map((id) => byId.get(id))
-      .filter((skill): skill is SkillDefinition => Boolean(skill && skill.compatibility !== 'external-only'))
+      .filter((skill): skill is SkillDefinition => Boolean(
+        skill
+        && skill.compatibility !== 'external-only'
+        && isSkillAllowedAtStage(skill, stageId, options.stageOverrides?.get(skill.id))
+        && matchSkillGenre(skill.manifest.genres, String(context.projectGenre ?? '')) !== 'mismatch'
+      ))
     return loadSelections(selected.map((skill) => ({
       skill,
       breakdown: {
@@ -66,6 +80,7 @@ export async function pickSkillsFor(
         stage: 0,
         trigger: 0,
         narrative: 0,
+        genre: 0,
         length: 0,
         priority: 0
       }
@@ -77,14 +92,14 @@ export async function pickSkillsFor(
   if (handler?.maxSkills && handler.maxSkills > 0) {
     maxSkills = handler.maxSkills
   }
+  maxSkills = Math.min(maxSkills, resolveAutoSkillLimit(stageId))
 
-  const stageId = String(context.stageId ?? '').trim()
   const userPrompt = String(context.userPrompt ?? '')
   const candidates = skills
     .filter((skill) => {
       if (isSkillExplicitlyMentioned(skill, userPrompt)) return true
-      if (!stageId || !options.stageOverrides?.has(skill.id)) return true
-      return options.stageOverrides.get(skill.id)?.includes(stageId as SkillDefinition['manifest']['stages'][number]) === true
+      return isSkillAllowedAtStage(skill, stageId, options.stageOverrides?.get(skill.id))
+        && matchSkillGenre(skill.manifest.genres, String(context.projectGenre ?? '')) !== 'mismatch'
     })
     .map((skill) => ({ skill, breakdown: computeScore(skill, task, context) }))
   const selected = selectSkillCandidates(candidates, userPrompt, maxSkills, compareCandidates)
@@ -102,7 +117,7 @@ async function loadSelections(
     results.push({
       id: skill.id,
       name: skill.name,
-      content: skill.content,
+      content: buildSkillContentExcerpt(skill, task),
       referenceContents,
       score: breakdown.total,
       scoreBreakdown: breakdown
@@ -132,7 +147,7 @@ function computeScore(
   task: AiTaskPayload,
   context: Record<string, unknown>
 ): ScoreBreakdown {
-  const empty: ScoreBreakdown = { total: 0, task: 0, stage: 0, trigger: 0, narrative: 0, length: 0, priority: 0 }
+  const empty: ScoreBreakdown = { total: 0, task: 0, stage: 0, trigger: 0, narrative: 0, genre: 0, length: 0, priority: 0 }
 
   // external-only skill 永远不参与匹配
   if (skill.compatibility === 'external-only') return empty
@@ -150,6 +165,10 @@ function computeScore(
   if (stageId && manifest.stages.includes(stageId as typeof manifest.stages[number])) {
     breakdown.stage = 5
   }
+
+  const genreMatch = matchSkillGenre(manifest.genres, String(context.projectGenre ?? ''))
+  if (genreMatch === 'match') breakdown.genre = 4
+  if (genreMatch === 'mismatch') breakdown.genre = -20
 
   // Trigger 关键词匹配：扩大 haystack，命中多个时累加（每个 +1，上限 +5）
   if (manifest.triggers.length > 0) {
@@ -176,8 +195,7 @@ function computeScore(
   }
 
   // 叙事功能匹配：根据章节摘要/大纲冲突推断叙事类型，匹配相关 skill。
-  // 既比对英文 id/description 子串（兼容 oh-story 系列），
-  // 也比对该 skill 的中文 triggers（命中主工具箱的中文 skill）。
+  // 既比对英文 id/description 子串，也比对 skill 的中文 triggers。
   const narrativeText = [
     String(context.chapterSummary ?? ''),
     String(context.currentOutlineConflict ?? ''),
@@ -196,7 +214,7 @@ function computeScore(
   }
 
   // 先按以上信号汇总，得到基础分；required 兜底保证不被 total=0 过滤
-  let core = breakdown.task + breakdown.stage + breakdown.trigger + breakdown.narrative
+  let core = breakdown.task + breakdown.stage + breakdown.trigger + breakdown.narrative + breakdown.genre
   if (manifest.required) {
     core = Math.max(core, 1)
   }

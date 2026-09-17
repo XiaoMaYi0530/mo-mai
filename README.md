@@ -1,17 +1,17 @@
 <div align="center">
 
-<img src="resources/icon.png" alt="CharacterArc Logo" width="120" height="120" />
+<img src="resources/icon.png" alt="墨脉 Logo" width="120" height="120" />
 
-# CharacterArc
+# 墨脉
 
-### 弧光 ·  AI 小说创作桌面应用
+### AI 小说创作桌面应用
 
 <p>
   面向需要长期维护项目设定、角色关系、剧情结构与章节正文的创作者
 </p>
 
 <p>
-  📘 <a href="https://ecnnfa0ullkb.feishu.cn/wiki/CuMxwE8xwiZyIkkYDDfcdmpjnRe?from=from_copylink"><strong>CharacterArc（弧光）使用教程图文版</strong></a>
+  📘 <a href="https://ecnnfa0ullkb.feishu.cn/wiki/CuMxwE8xwiZyIkkYDDfcdmpjnRe?from=from_copylink"><strong>墨脉使用教程图文版</strong></a>
 </p>
 
 <p>
@@ -39,7 +39,7 @@
 
 ## ✨ 项目简介
 
-CharacterArc（弧光）不是"只会对话的 AI 壳子"，而是一套围绕小说项目组织、章节写作与 AI 协作搭起来的桌面工作台。
+墨脉不是“只会对话的 AI 壳子”，而是一套围绕小说项目组织、章节写作与 AI 协作搭起来的桌面工作台。
 
 <table>
   <tr>
@@ -78,7 +78,10 @@ CharacterArc（弧光）不是"只会对话的 AI 壳子"，而是一套围绕�
 - **项目中心**：创建、查看、编辑、删除小说项目
 - **新建项目向导**：填写题材、篇幅、简介，可调用 AI 生成首批设定与大纲
 - **创作记忆面板**：按分卷维护计划、进度、伏笔和素材，支持参考作品拆解
+- **自动派生创作记忆账本**：从章节、大纲、人物、伏笔和项目约束生成统一小结，各模型共用同一份项目进度
 - **知识中心**：沉淀项目事实、创作记忆、参考资料与风格分析结果
+- **分维度深度拆书**：开篇读取黄金章节，主线覆盖全书前中后段，人物与世界观按关键词命中章节取样，并支持缺失维度续作
+- **拆书转原创立项**：先在用户原创方向内生成 4 条因果机制不同的故事路线，手动选定后再生成可审阅的分卷与章节骨架
 - **技能系统**：支持启用内置 Skill，也支持为单项目导入额外 Skill 包
 
 </details>
@@ -98,6 +101,7 @@ CharacterArc（弧光）不是"只会对话的 AI 壳子"，而是一套围绕�
 
 - **三栏布局**：目录树 + 正文编辑器 + AI 侧边栏
 - **按大纲新建章节**：新建章节时先选择大纲节点，自动带入标题、摘要、字数目标并建立绑定
+- **拆书骨架章节规划**：一个剧情节点可展开为多章建议，审阅骨架后批量创建并保持与原大纲节点绑定
 - **富文本编辑**：基于 TipTap，支持搜索替换、格式化、选区动作
 - **自动保存与历史版本**：编辑后自动落盘，支持手动快照与回滚
 - **阅读模式 / 专注模式**：以更接近成稿阅读的方式检查节奏
@@ -119,6 +123,7 @@ CharacterArc（弧光）不是"只会对话的 AI 壳子"，而是一套围绕�
 - **全局助手 v2**：跨项目资料检索、设定修改、审计沉淀和暂存变更审阅
 - **Agent Loop 模式**：让模型按 Skill 索引与工具注册表循环思考，v2 可按对话自动匹配 Skills
 - **任务进度面板**：统一查看正在运行与历史 AI 任务
+- **可恢复任务状态**：应用重启后保留中断记录；拆书、状态补录等有检查点的任务从未完成步骤继续
 
 </details>
 
@@ -132,7 +137,7 @@ CharacterArc（弧光）不是"只会对话的 AI 壳子"，而是一套围绕�
 
 ## 📸 截图
 
-下面这组截图按实际创作流程排列，基本覆盖了弧光从项目管理、拆书沉淀、Skill 配置到章节写作和封面生成的主要体验。
+下面这组截图按实际创作流程排列，基本覆盖了墨脉从项目管理、拆书沉淀、Skill 配置到章节写作和封面生成的主要体验。
 
 <table>
   <tr>
@@ -258,7 +263,7 @@ macOS 产物为 ad-hoc 签名、未公证的 `.dmg` / `.zip`，适合内部安�
 <summary>点击展开完整目录树</summary>
 
 ```
-CharacterArc/
+mo-mai/
 ├── electron/
 │   ├── main/
 │   │   ├── ai/                    # AI 管线
@@ -320,46 +325,34 @@ CharacterArc/
 
 ## 🧰 内置 Skill 包
 
-应用当前在 `resources/skills/` 下内置 3 组、共 28 个 Skill。技能面板会按来源分组展示，开发版与打包版使用同一套目录结构。
+应用当前在 `resources/skills/` 下内置 2 组、共 12 个定位清晰的 Skill。技能面板会显示中文名称、功能说明、适用阶段和适用题材；不限题材的 Skill 统一标记为“通用题材”。开发版与打包版使用同一套目录结构。
 
 | 来源 | 数量 | 代表 Skill | 说明 |
 |---|---:|---|---|
-| `oh-story-claudecode` | 12 | `story-long-write`、`story-short-write`、`story-chapter-exec` | 核心网文写作工作流，覆盖长篇、短篇、章节执行、拆文、扫榜、封面、去 AI 味、故事蓝图与番茄排版 |
-| `community-skills` | 3 | `humanizer-zh`、`style-fingerprint`、`style-fusion` | 通用风格与润色能力，适合中文去 AI 味、风格提取和风格融合 |
-| `Distilled-Novel-Toolbox` | 13 | `novel-pacing`、`novel-worldbuilding`、`novel-commercialization` | 工程化网文知识库，覆盖题材、人设、世界观、节奏、情绪、爽点、润色、平台、合规与反检测 |
-
-### `oh-story-claudecode`
-
-- `story-long-write`、`story-long-analyze`、`story-long-scan`
-- `story-short-write`、`story-short-analyze`、`story-short-scan`
-- `story-chapter-exec`、`story-chapter-repair`
-- `story-blueprint`、`story-cover`、`story-deslop`、`story-format-tomato`
+| `community-skills` | 2 | `style-fingerprint`、`style-fusion` | 提取参考作品的风格特征，并转化为原创项目可执行的风格指南 |
+| `Distilled-Novel-Toolbox` | 10 | `novel-pacing`、`novel-worldbuilding`、`novel-character-design` | 覆盖题材、人设、世界观、节奏、情绪、爽点、语言、平台和合规 |
 
 ### `community-skills`
 
-- `humanizer-zh`：中文小说去 AI 味润色
-- `style-fingerprint`：提取参考文本的风格指纹
-- `style-fusion`：组合多个来源的风格特征
+- `style-fingerprint`（风格指纹提取）：分析参考文本，不直接创作正文
+- `style-fusion`（风格融合指南）：把风格指纹映射为原创项目规则
 
 ### `Distilled-Novel-Toolbox`
 
-- `novel-anti-detection`：反 AI 检测与混合创作风控
-- `novel-character-design`：主角、配角、反派与人物弧光设计
-- `novel-commercialization`：平台选择、签约与商业化方向
-- `novel-compliance`：平台规则、敏感词与内容合规
-- `novel-emotion`：情绪曲线、共情点与沉浸感设计
-- `novel-genres`：题材选择、子类融合与赛道判断
-- `novel-innovation`：反套路、微创新与趋势参考
-- `novel-language-style`：文风、视角、修辞与画面感
-- `novel-pacing`：开篇、断章、高潮与整体节奏
-- `novel-pleasure-points`：爽点设计与疲劳管理
-- `novel-polishing`：润色、去 AI 味与风格增强
-- `novel-tools`：提示词、写作工作流与发布分析
-- `novel-worldbuilding`：世界观、势力、规则与设定一致性
+- `novel-character-design`（人物与群像设计）
+- `novel-commercialization`（平台与商业化）
+- `novel-compliance`（内容合规检查）
+- `novel-emotion`（情绪与代入感）
+- `novel-genres`（题材与类型融合）
+- `novel-innovation`（网文创意孵化）
+- `novel-language-style`（语言与文风）
+- `novel-pacing`（章节节奏与结构）
+- `novel-pleasure-points`（爽点设计）
+- `novel-worldbuilding`（世界观与设定）
 
 > `resources/skills/<来源>/<skill-id>/SKILL.md` 会被自动扫描为内置 Skill；同级的 `scripts/` 等辅助目录不会被当成 Skill。
 >
-> 还可以导入独立的 Skill 包，作用范围仅限该项目。
+> 还可以在全局 Skill 设置中导入独立 Skill 包，再由每个项目决定是否启用、适用阶段和默认预设。导入时会跳过同内容副本；同 ID 但内容更新时使用可回滚的安全替换。AI 只加载与当前任务相关的 Skill 章节，并在对话预览与回执中说明选中、跳过或回退原因。
 
 ## 💾 数据存储
 

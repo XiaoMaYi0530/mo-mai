@@ -1,6 +1,6 @@
 ---
-name: novel-worldbuilding
-description: 网文世界观与设定体系。当用户需要构建力量体系、设计地图与势力格局、建立经济体系、维护设定一致性、铺设悬念与谜题时触发。覆盖修仙/玄幻/科幻/都市等各类世界观模板与设定管理方法。
+name: 世界观与设定
+description: 构建力量体系、地图势力、社会经济规则与设定约束；适合立项和设定建设，不用于正文润色。
 license: MIT
 compatibility: opencode
 metadata:
@@ -11,6 +11,8 @@ manifest:
   compatibility: native
   enabled: true
   priority: 7
+  genres:
+    - general
   stages:
     - premise
     - setting

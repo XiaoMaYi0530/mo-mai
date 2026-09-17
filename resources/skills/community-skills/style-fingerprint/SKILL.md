@@ -1,9 +1,9 @@
 ---
-name: style-fingerprint
+name: 风格指纹提取
 version: 1.0.0
 description: |
-  作者风格指纹提取。从小说样本文本（3-10万字）中提取可复现500+章节的量化风格DNA，
-  覆盖叙事架构、语言签名、对话系统、描写协议、禁忌模式和主题执行六大维度。
+  从参考小说样本提取叙事、语言、对话、描写、禁忌和主题六类风格特征；
+  只负责分析并生成可复用指纹，不直接创作正文。
 manifest:
   category: analysis
   tasks:
@@ -21,6 +21,9 @@ manifest:
     - 文风DNA
     - 量化分析
   priority: 7
+  genres:
+    - general
+  exclusiveGroup: reference-style-analysis
   required: false
   enabled: true
   compatibility: native

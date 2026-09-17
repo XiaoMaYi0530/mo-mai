@@ -80,3 +80,20 @@ test('旧任务稍后结束时不会清除仍在运行的新任务', async () =>
   assert.equal(await latestTask, 'latest')
   assert.equal(coordinator.isRunning('chapter:1'), false)
 })
+
+test('并发受限时其余业务键排队等待', async () => {
+  const coordinator = new BackgroundTaskCoordinator(1)
+  const firstPending = deferred()
+  let secondStarted = false
+  const first = coordinator.runLatest('chapter:1', 'a', async () => firstPending.promise)
+  const second = coordinator.runLatest('chapter:2', 'b', async () => {
+    secondStarted = true
+    return 'second'
+  })
+  await Promise.resolve()
+  assert.equal(secondStarted, false)
+  assert.equal(coordinator.queuedCount, 1)
+  firstPending.resolve('first')
+  assert.equal(await first, 'first')
+  assert.equal(await second, 'second')
+})

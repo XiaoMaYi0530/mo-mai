@@ -61,3 +61,16 @@ test('修改大纲时同时暴露大纲节点与分卷暂存工具', () => {
   assert.ok(selected.includes('stage_outline'))
   assert.ok(selected.includes('stage_outline_volume'))
 })
+
+test('模糊追问继承大纲阶段后仍暴露大纲暂存工具', () => {
+  const selected = selectToolsForTurn(tools, {
+    surface,
+    intent: 'chat',
+    userMessage: '继续',
+    skillStageId: 'outline'
+  }).map((tool) => tool.definition.name)
+
+  assert.ok(selected.includes('stage_outline'))
+  assert.ok(selected.includes('stage_outline_volume'))
+  assert.ok(!selected.includes('stage_chapter_create'))
+})

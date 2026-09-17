@@ -20,7 +20,7 @@ import TitlebarAiTaskCenter from '@/components/TitlebarAiTaskCenter.vue'
 const appStore = useAppStore()
 // 当前运行平台（win32 / darwin / linux），用于适配标题栏高度
 const platform = window.characterArc?.platform ?? 'unknown'
-const appName = '弧光'
+const appName = '墨脉'
 const appVersion = window.characterArc?.version ?? ''
 const { message } = createDiscreteApi(['message'])
 let themeTransitionFrame: number | null = null
@@ -184,8 +184,7 @@ onBeforeUnmount(() => {
             <span class="app-titlebar__brand">
               {{ appName }}
               <span v-if="appVersion" class="app-titlebar__version">v{{ appVersion }}</span>
-              <span class="app-titlebar__tag">开源免费</span>
-              <span class="app-titlebar__qq">QQ交流群 1077457764</span>
+              <span class="app-titlebar__tag">AI 创作工作台</span>
             </span>
             <div class="app-titlebar__tools">
               <TitlebarModelSwitcher />

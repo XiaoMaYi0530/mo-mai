@@ -13,6 +13,7 @@ import { makeCurrentChapterProvider } from './current-chapter'
 import { makeWorldviewProvider } from './worldview'
 import { makeCharactersProvider } from './characters'
 import { makeRecentMessagesProvider } from './recent-messages'
+import { makeStyleFingerprintProvider } from './style-fingerprint'
 import {
   makeConstraintsProvider,
   makeInspirationProvider,
@@ -36,6 +37,7 @@ export function registerBuiltinProviders(deps: RegisterBuiltinProvidersDeps): vo
   contextBuilder.register(makeProjectDigestProvider(snapshot))
   contextBuilder.register(makeCurrentChapterProvider(snapshot))
   contextBuilder.register(makeRecentMessagesProvider(getConversation))
+  contextBuilder.register(makeStyleFingerprintProvider(snapshot))
   contextBuilder.register(makeWorldviewProvider(snapshot))
   contextBuilder.register(makeCharactersProvider(snapshot))
   contextBuilder.register(makeOrganizationsProvider(snapshot))

@@ -7,6 +7,9 @@ import { getChapterPreviewText, getPlainTextFromEditorContent } from '@/features
 import { useAppStore } from '@/stores/app'
 import { parseChapterWordTarget } from '@/features/chapters/wordTarget'
 import type { NovelWorkflowStageId, ProjectSkillItem } from '@/types/app'
+import type { SkillUsePolicy } from '@shared/assistant-runtime'
+import type { SkillPresetId } from '@shared/skill-presets'
+import SkillPolicyPicker from '@/components/assistantV2/SkillPolicyPicker.vue'
 import {
   createDefaultFirstDraftSteps,
   createFirstDraftStepsForStrategy,
@@ -152,15 +155,25 @@ function formatCheckpointDate(value: string): string {
   return Number.isNaN(date.getTime()) ? '上次' : date.toLocaleString('zh-CN')
 }
 
-const draftSkillOptions = computed(() => selectableProjectSkills.value.map((skill) => ({
-  label: `${skill.name} · ${getSkillCategoryLabel(skill)}`,
-  value: skill.id
-})))
+const draftPresetIds: SkillPresetId[] = ['draft', 'polish']
+const draftSkillPolicy = computed<SkillUsePolicy>({
+  get: () => ({
+    mode: steps.draft.skillMode,
+    skillIds: [...steps.draft.skillIds],
+    ...(steps.draft.skillPresetId ? { presetId: steps.draft.skillPresetId } : {})
+  }),
+  set: (policy) => {
+    steps.draft.skillMode = policy.mode
+    steps.draft.skillIds = [...policy.skillIds]
+    steps.draft.skillPresetId = policy.presetId
+  }
+})
 
 function selectStrategy(value: FirstDraftStrategy): void {
   const currentDraftPolicy = {
     skillMode: steps.draft.skillMode,
     skillIds: [...steps.draft.skillIds],
+    skillPresetId: steps.draft.skillPresetId,
     userPrompt: steps.draft.userPrompt
   }
   strategy.value = value
@@ -238,6 +251,7 @@ function buildCurrentConfig(): FirstDraftConfig {
         enabled: item.required ? true : steps[item.id].enabled,
         skillMode: steps[item.id].skillMode,
         skillIds: steps[item.id].skillIds.filter((skillId) => selectableSkillIds.has(skillId)),
+        skillPresetId: steps[item.id].skillPresetId,
         userPrompt: steps[item.id].userPrompt.trim()
       }
       return acc
@@ -359,6 +373,12 @@ function toggleStepSkill(stepId: FirstDraftStepId, skillId: string): void {
   steps[stepId].skillIds = current.includes(skillId)
     ? current.filter((id) => id !== skillId)
     : [...current, skillId]
+  steps[stepId].skillPresetId = undefined
+}
+
+function setStepSkillMode(stepId: FirstDraftStepId, mode: FirstDraftSkillMode): void {
+  steps[stepId].skillMode = mode
+  if (mode !== 'only') steps[stepId].skillPresetId = undefined
 }
 
 const failureOptions: Array<{ label: string; value: FirstDraftFailurePolicy }> = [
@@ -565,29 +585,23 @@ function handleConfirm(): void {
         <div class="section-title-row">
           <div>
             <label class="section-label">正文 Skill</label>
-            <p class="section-hint">这里只控制正文生成；选择“仅使用”时可以多选。</p>
+            <p class="section-hint">与助手使用同一套规则：自动匹配、固定使用（快捷组合或手动选择）、不使用。</p>
           </div>
           <n-button size="tiny" quaternary @click="showAdvanced = !showAdvanced">
             <template #icon><Settings2 :size="13" /></template>
             {{ showAdvanced ? '收起高级设置' : '高级设置' }}
           </n-button>
         </div>
-        <div class="primary-skill-fields">
-          <n-select v-model:value="steps.draft.skillMode" size="small" :options="skillModeOptions" />
-          <n-select
-            v-if="steps.draft.skillMode === 'only'"
-            v-model:value="steps.draft.skillIds"
-            multiple
-            filterable
-            size="small"
-            placeholder="选择一个或多个正文 Skill"
-            :options="draftSkillOptions"
-            :loading="isLoadingProjectSkills"
-          />
-        </div>
-        <n-alert v-if="steps.draft.skillMode === 'only' && steps.draft.skillIds.length === 0" type="warning" :bordered="false">
-          “仅使用”模式至少要选择一个 Skill。
-        </n-alert>
+        <div v-if="isLoadingProjectSkills" class="skill-picker-empty">正在加载可用 Skill…</div>
+        <SkillPolicyPicker
+          v-else
+          v-model="draftSkillPolicy"
+          :available-skills="selectableProjectSkills"
+          :project-genre="project?.genre"
+          :skill-preset-bindings="project?.skillPresetBindings"
+          :preset-ids="draftPresetIds"
+          scope-note="只影响正文生成步骤。"
+        />
       </section>
 
       <template v-if="showAdvanced">
@@ -688,8 +702,8 @@ function handleConfirm(): void {
       <section v-if="referenceWorks.length > 0" class="config-section reference-panel">
         <div class="section-title-row">
           <div>
-            <label class="section-label">参考作品（拆书库）</label>
-            <p class="section-hint">勾选的作品风格将注入初稿步骤，不勾选则不参考。</p>
+            <label class="section-label">参考作品（结构与题材资料）</label>
+            <p class="section-hint">这里只选择拆书结构资料；项目设置绑定的风格指纹会自动用于正文生成与润色，不受这里勾选影响。</p>
           </div>
           <span class="selection-count">{{ selectedRefIds.length }} / {{ referenceWorks.length }}</span>
         </div>
@@ -757,9 +771,10 @@ function handleConfirm(): void {
                   </n-tooltip>
                 </div>
                 <n-select
-                  v-model:value="steps[activeStep.id].skillMode"
+                  :value="steps[activeStep.id].skillMode"
                   size="small"
                   :options="skillModeOptions"
+                  @update:value="setStepSkillMode(activeStep.id, $event)"
                 />
               </section>
 
@@ -986,12 +1001,6 @@ function handleConfirm(): void {
 .strategy-card > span:last-child {
   font-size: 12px;
   line-height: 1.45;
-}
-
-.primary-skill-fields {
-  display: grid;
-  grid-template-columns: minmax(160px, 0.5fr) minmax(0, 1.5fr);
-  gap: 8px;
 }
 
 .compact-panel {

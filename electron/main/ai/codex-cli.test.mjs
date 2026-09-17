@@ -35,7 +35,7 @@ test('Codex exec 使用只读 JSONL 与 stdin，并传递模型和推理强度',
     ...codexSettings,
     model: 'gpt-5.6-sol',
     codexReasoningEffort: 'high'
-  })
+  }, { reasoningSummary: 'concise' })
 
   assert.deepEqual(args.slice(0, 6), [
     'exec',
@@ -47,6 +47,7 @@ test('Codex exec 使用只读 JSONL 与 stdin，并传递模型和推理强度',
   ])
   assert.ok(args.includes('features.shell_tool=false'))
   assert.ok(args.includes('model_reasoning_effort="high"'))
+  assert.ok(args.includes('model_reasoning_summary="concise"'))
   assert.deepEqual(args.slice(-3), ['--model', 'gpt-5.6-sol', '-'])
 })
 

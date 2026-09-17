@@ -3,6 +3,13 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NButton } from 'naive-ui'
 import { AlertTriangle, ChevronLeft, ChevronRight, Maximize2, Minimize2, RotateCcw } from 'lucide-vue-next'
 import type { StagedChange, StagedChangeCommitResult } from '@shared/assistant-runtime'
+import { resolveStagedReferenceText } from '@shared/staged-reference-labels'
+import { chapterHtmlToPlainText } from '@shared/chapter-text.ts'
+import { assessChapterReplacementRisk } from '@shared/chapter-edit-safety.ts'
+import { useAppStore } from '@/stores/app'
+import { buildStagedTextDiff, type StagedTextDiff } from '@/features/assistant/stagedTextDiff'
+
+const appStore = useAppStore()
 
 const props = defineProps<{
   changes: StagedChange[]
@@ -45,7 +52,7 @@ const acceptedCount = computed(() =>
 )
 const visiblePendingIds = computed(() =>
   filtered.value
-    .filter((c) => c.status === 'pending')
+    .filter((c) => c.status === 'pending' && !hasUnsafeChapterReplacement(c))
     .map((c) => c.id)
 )
 
@@ -104,56 +111,45 @@ function actionLabel(action: string): string {
   }
 }
 
-function splitLines(text: string): string[] {
-  return text.split(/\n+/).map((s) => s.trim()).filter(Boolean)
+function displayText(text: string): string {
+  return resolveStagedReferenceText(text, {
+    characters: appStore.characters,
+    organizations: appStore.organizations,
+    worldviewEntries: appStore.worldviewEntries,
+    outlineItems: appStore.outlineItems,
+    outlineVolumes: appStore.outlineVolumes,
+    chapters: appStore.chapters
+  })
 }
 
-/**
- * 基于 LCS 的行级 diff（对齐 v1 段落对照思路）：
- * 相比旧的 Set 去重实现，能保留重复行、按原文顺序交错输出增删，
- * 编辑过的段落不会被错误地整段标为"删+增"。
- */
-function diffRows(before: string, after: string): Array<{ type: 'del' | 'add' | 'context'; line: string }> {
-  const b = splitLines(before)
-  const a = splitLines(after)
-  const n = b.length
-  const m = a.length
-  // LCS 长度表
-  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0))
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      lcs[i][j] = b[i] === a[j]
-        ? lcs[i + 1][j + 1] + 1
-        : Math.max(lcs[i + 1][j], lcs[i][j + 1])
-    }
-  }
-  const rows: Array<{ type: 'del' | 'add' | 'context'; line: string }> = []
-  let i = 0
-  let j = 0
-  while (i < n && j < m) {
-    if (b[i] === a[j]) {
-      rows.push({ type: 'context', line: b[i] })
-      i++; j++
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-      rows.push({ type: 'del', line: b[i] })
-      i++
-    } else {
-      rows.push({ type: 'add', line: a[j] })
-      j++
-    }
-  }
-  while (i < n) { rows.push({ type: 'del', line: b[i] }); i++ }
-  while (j < m) { rows.push({ type: 'add', line: a[j] }); j++ }
-  return rows
+function comparisonText(change: StagedChange, side: 'before' | 'after'): string {
+  const chapterHtml = side === 'before' ? change.chapterHtml?.old : change.chapterHtml?.new
+  const raw = change.kind === 'chapter' && chapterHtml
+    ? chapterHtmlToPlainText(chapterHtml)
+    : change[side]
+  return displayText(raw)
 }
 
-function computeDiff(before: string, after: string): { added: string[]; removed: string[] } {
-  const rows = diffRows(before, after)
-  return {
-    added: rows.filter((r) => r.type === 'add').map((r) => r.line),
-    removed: rows.filter((r) => r.type === 'del').map((r) => r.line)
-  }
+function hasUnsafeChapterReplacement(change: StagedChange): boolean {
+  if (change.kind !== 'chapter' || !change.chapterHtml) return false
+  return assessChapterReplacementRisk({
+    oldHtml: change.chapterHtml.old,
+    newHtml: change.chapterHtml.new,
+    search: change.before,
+    replacement: change.after
+  }).unsafe
 }
+
+const stagedDiffById = computed(() => new Map(
+  props.changes.map((change) => [
+    change.id,
+    buildStagedTextDiff(
+      comparisonText(change, 'before'),
+      comparisonText(change, 'after'),
+      { mode: change.kind === 'chapter' ? 'chapter' : 'line' }
+    )
+  ])
+))
 
 function reviewChange(id: string): void {
   reviewingId.value = id
@@ -212,8 +208,17 @@ function handleReviewKeyboard(event: KeyboardEvent): void {
 onMounted(() => window.addEventListener('keydown', handleReviewKeyboard))
 onBeforeUnmount(() => window.removeEventListener('keydown', handleReviewKeyboard))
 
-function diffBlocks(change: StagedChange): Array<{ type: 'del' | 'add' | 'context'; line: string }> {
-  return diffRows(change.before, change.after)
+function stagedDiff(change: StagedChange): StagedTextDiff {
+  return stagedDiffById.value.get(change.id)
+    ?? buildStagedTextDiff(
+      comparisonText(change, 'before'),
+      comparisonText(change, 'after'),
+      { mode: change.kind === 'chapter' ? 'chapter' : 'line' }
+    )
+}
+
+function diffBlocks(change: StagedChange): StagedTextDiff['rows'] {
+  return stagedDiff(change).rows
 }
 
 function hasTargetCandidates(change: StagedChange): boolean {
@@ -298,6 +303,15 @@ function impactWarnings(change: StagedChange): string[] {
         <p v-for="warning in impactWarnings(reviewingChange)" :key="warning">{{ warning }}</p>
       </div>
 
+      <div v-if="hasUnsafeChapterReplacement(reviewingChange)" class="unsafe-replacement-warning review-impact" role="alert">
+        <div class="impact-warning-head">
+          <AlertTriangle :size="15" />
+          <strong>这条章节修改不能确认</strong>
+        </div>
+        <p>局部定位片段过短，但替换内容接近整章，可能形成“新稿＋旧稿剩余内容”的重复正文，差异也会失真。</p>
+        <span>请忽略这条提案，重新发送“整章润色/重写”；系统会按整章替换生成新提案。</span>
+      </div>
+
       <div
         v-if="commitResult(reviewingChange.id)?.ok === false"
         class="commit-issue review-issue"
@@ -342,28 +356,39 @@ function impactWarnings(change: StagedChange): string[] {
 
         <div v-if="reviewDisplayMode === 'diff'" class="review-section">
           <div class="review-section-head">差异摘要</div>
-          <div v-if="diffBlocks(reviewingChange).length" class="review-diff">
+          <div v-if="reviewingChange.kind === 'chapter' && stagedDiff(reviewingChange).formattingChanged" class="layout-change-note">
+            排版也有变化：{{ stagedDiff(reviewingChange).beforeParagraphCount }} 段 → {{ stagedDiff(reviewingChange).afterParagraphCount }} 段。下方内容差异已忽略空行、缩进和重新分段。
+          </div>
+          <div v-if="stagedDiff(reviewingChange).contentChanged" class="review-diff">
             <div
               v-for="(block, index) in diffBlocks(reviewingChange)"
               :key="index"
               class="review-diff-line"
               :class="block.type"
             >
-              <span>{{ block.type === 'add' ? '+' : block.type === 'del' ? '-' : ' ' }}</span>
-              <p>{{ block.line }}</p>
+              <span>{{ block.type === 'add' ? '+' : block.type === 'del' ? '-' : block.type === 'ellipsis' ? '⋯' : ' ' }}</span>
+              <p>
+                <mark
+                  v-for="(segment, segmentIndex) in block.segments"
+                  :key="segmentIndex"
+                  :class="segment.type"
+                >{{ segment.text }}</mark>
+              </p>
             </div>
           </div>
-          <div v-else class="review-empty">没有检测到文本差异。</div>
+          <div v-else class="review-empty">
+            {{ reviewingChange.kind === 'chapter' && stagedDiff(reviewingChange).formattingChanged ? '正文文字相同，本次只调整了段落或空白排版。' : '没有检测到文本差异。' }}
+          </div>
         </div>
 
         <div v-else class="compare">
           <div class="compare-col before">
             <div class="compare-head">修改前</div>
-            <pre>{{ reviewingChange.before || '（空）' }}</pre>
+            <pre>{{ comparisonText(reviewingChange, 'before') || '（空）' }}</pre>
           </div>
           <div class="compare-col after">
             <div class="compare-head">修改后</div>
-            <pre>{{ reviewingChange.after || '（空）' }}</pre>
+            <pre>{{ comparisonText(reviewingChange, 'after') || '（空）' }}</pre>
           </div>
         </div>
       </div>
@@ -376,7 +401,7 @@ function impactWarnings(change: StagedChange): string[] {
         <NButton
           size="small"
           :type="reviewingChange.status === 'accepted' ? 'primary' : 'default'"
-          :disabled="reviewingChange.status === 'committed'"
+          :disabled="reviewingChange.status === 'committed' || hasUnsafeChapterReplacement(reviewingChange)"
           @click="emit('accept', [reviewingChange.id])"
         >
           {{ reviewingChange.status === 'accepted' ? '已确认' : reviewingChange.status === 'rejected' ? '恢复这项' : '确认这项' }}
@@ -469,6 +494,14 @@ function impactWarnings(change: StagedChange): string[] {
           <p v-for="warning in impactWarnings(c)" :key="warning">{{ warning }}</p>
         </div>
 
+        <div v-if="hasUnsafeChapterReplacement(c)" class="unsafe-replacement-warning" role="alert">
+          <div class="impact-warning-head">
+            <AlertTriangle :size="14" />
+            <strong>疑似整章误用局部替换，已禁止确认</strong>
+          </div>
+          <p>请忽略此项，并重新使用“整章润色/重写”。</p>
+        </div>
+
         <div v-if="commitResult(c.id)?.ok === false" class="commit-issue" role="alert">
           <div class="commit-issue-head">
             <AlertTriangle :size="15" />
@@ -512,26 +545,29 @@ function impactWarnings(change: StagedChange): string[] {
         </div>
 
         <div class="diff">
-          <template v-for="(line, i) in computeDiff(c.before, c.after).removed" :key="'d' + i">
+          <template v-for="(line, i) in stagedDiff(c).removed" :key="'d' + i">
             <div v-if="i < 3" class="diff-line del">- {{ line.slice(0, 120) }}{{ line.length > 120 ? '…' : '' }}</div>
           </template>
-          <template v-for="(line, i) in computeDiff(c.before, c.after).added" :key="'a' + i">
+          <template v-for="(line, i) in stagedDiff(c).added" :key="'a' + i">
             <div v-if="i < 3" class="diff-line add">+ {{ line.slice(0, 120) }}{{ line.length > 120 ? '…' : '' }}</div>
           </template>
+          <div v-if="c.kind === 'chapter' && !stagedDiff(c).contentChanged && stagedDiff(c).formattingChanged" class="diff-line layout-only">
+            仅调整排版：{{ stagedDiff(c).beforeParagraphCount }} 段 → {{ stagedDiff(c).afterParagraphCount }} 段
+          </div>
         </div>
 
         <div v-if="expandedIds.has(c.id)" class="expanded">
           <div class="side-head">修改前</div>
-          <div class="side-body">{{ c.before || '（空）' }}</div>
+          <div class="side-body">{{ comparisonText(c, 'before') || '（空）' }}</div>
           <div class="side-head">修改后</div>
-          <div class="side-body">{{ c.after || '（空）' }}</div>
+          <div class="side-body">{{ comparisonText(c, 'after') || '（空）' }}</div>
         </div>
 
         <div class="actions">
           <NButton
             size="tiny"
             :type="c.status === 'accepted' ? 'primary' : 'default'"
-            :disabled="c.status === 'committed'"
+            :disabled="c.status === 'committed' || hasUnsafeChapterReplacement(c)"
             @click="emit('accept', [c.id])"
           >
             {{ c.status === 'accepted' ? '✓ 已确认' : c.status === 'rejected' ? '恢复' : '确认' }}
@@ -806,6 +842,27 @@ function impactWarnings(change: StagedChange): string[] {
   font-size: 11.5px;
   line-height: 1.55;
 }
+.unsafe-replacement-warning {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--arc-text-secondary);
+}
+.unsafe-replacement-warning.review-impact {
+  margin: 12px 16px 0;
+}
+.unsafe-replacement-warning .impact-warning-head {
+  color: #dc2626;
+}
+.unsafe-replacement-warning p,
+.unsafe-replacement-warning span {
+  display: block;
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
 .target-box {
   border: 1px solid var(--arc-border);
   border-radius: 8px;
@@ -902,6 +959,21 @@ function impactWarnings(change: StagedChange): string[] {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.review-diff-line mark {
+  padding: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+}
+.review-diff-line.del mark.del {
+  background: color-mix(in srgb, var(--v2-del, #b91c1c) 18%, transparent);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.review-diff-line.add mark.add {
+  background: color-mix(in srgb, var(--v2-add, #047857) 20%, transparent);
+  font-weight: 600;
+}
 .review-diff-line.add {
   background: var(--v2-add-bg, rgba(4, 120, 87, 0.09));
   color: var(--v2-add, #047857);
@@ -915,6 +987,21 @@ function impactWarnings(change: StagedChange): string[] {
 }
 .review-diff-line.context span {
   color: transparent;
+}
+.review-diff-line.ellipsis {
+  background: var(--arc-bg-body);
+  color: var(--arc-text-hint);
+  font-style: italic;
+}
+.layout-change-note {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--arc-primary) 24%, var(--arc-border));
+  border-radius: 8px;
+  background: var(--arc-primary-soft);
+  color: var(--arc-text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
 }
 .review-empty {
   padding: 14px;
@@ -1236,6 +1323,10 @@ strong.action-create {
 .diff-line.del {
   background: var(--v2-del-bg, rgba(185, 28, 28, 0.07));
   color: var(--v2-del, #b91c1c);
+}
+.diff-line.layout-only {
+  background: var(--arc-primary-soft);
+  color: var(--arc-text-secondary);
 }
 .diff-line + .diff-line {
   border-top: 1px solid var(--arc-border);

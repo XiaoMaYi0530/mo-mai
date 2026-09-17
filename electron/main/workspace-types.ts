@@ -1,5 +1,7 @@
 import type { ReferenceStyleMetric } from './referenceAnalysis'
-import type { SkillUsePolicy } from '../shared/assistant-runtime'
+import { normalizeSkillUsePolicy, type SkillUsePolicy } from '../shared/assistant-runtime.ts'
+import { normalizeSkillPresetBindings, type SkillPresetBindings } from '../shared/skill-presets.ts'
+import { normalizeStyleFingerprintBinding, type ProjectStyleFingerprintBinding } from '../shared/style-fingerprint-binding.ts'
 
 export type KnowledgeDocumentSourceType =
   | 'reference-summary'
@@ -170,6 +172,7 @@ export type WorkspacePayload = {
       stageIds: Array<'reference' | 'premise' | 'setting' | 'outline' | 'draft'>
     }>
     skillPolicy: SkillUsePolicy
+    skillPresetBindings: SkillPresetBindings
     chapterAssistantTemplates: Array<{
       id: string
       label: string
@@ -181,6 +184,7 @@ export type WorkspacePayload = {
       requiresSelection: boolean
     }>
     selectedReferenceWorkIds: string[]
+    styleFingerprintBinding: ProjectStyleFingerprintBinding
   }>
   workspaces: Record<
     string,
@@ -641,21 +645,20 @@ export function normalizeProjectRecord(
     novelWorkflowStages: Array.isArray(project.novelWorkflowStages) ? project.novelWorkflowStages : [],
     projectSkills: Array.isArray(project.projectSkills) ? project.projectSkills : [],
     skillPolicy: normalizeWorkspaceSkillPolicy(project.skillPolicy),
+    skillPresetBindings: normalizeSkillPresetBindings(project.skillPresetBindings),
     chapterAssistantTemplates: Array.isArray(project.chapterAssistantTemplates) ? project.chapterAssistantTemplates : [],
     selectedReferenceWorkIds: Array.isArray(project.selectedReferenceWorkIds)
       ? project.selectedReferenceWorkIds.map((id) => String(id).trim()).filter(Boolean)
-      : []
+      : [],
+    styleFingerprintBinding: normalizeStyleFingerprintBinding(
+      project.styleFingerprintBinding,
+      project.selectedReferenceWorkIds
+    )
   }
 }
 
 function normalizeWorkspaceSkillPolicy(value: unknown): SkillUsePolicy {
-  if (!value || typeof value !== 'object') return { mode: 'auto', skillIds: [] }
-  const raw = value as { mode?: unknown; skillIds?: unknown }
-  const mode = raw.mode === 'only' || raw.mode === 'off' ? raw.mode : 'auto'
-  const skillIds = Array.isArray(raw.skillIds)
-    ? [...new Set(raw.skillIds.map((id) => String(id ?? '').trim()).filter(Boolean))]
-    : []
-  return { mode, skillIds }
+  return normalizeSkillUsePolicy(value)
 }
 
 export function normalizeCoverWorkbenchHistory(

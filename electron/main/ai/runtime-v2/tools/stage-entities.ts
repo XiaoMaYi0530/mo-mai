@@ -15,10 +15,15 @@ import { getProjectView } from '../providers/shared'
 import type { WorkflowDocumentKey } from '../../../workspace-types'
 import { validateOutlineNarrativeUpdate } from '@shared/outline-update-policy'
 import {
+  formatStagedReferenceNames,
+  type StagedReferenceCatalog
+} from '@shared/staged-reference-labels'
+import {
   attachImpactWarnings,
   buildDeleteImpactWarnings,
   buildOutlineUpdateImpactWarnings
 } from '../change-impact'
+import { resolveOutlineCreate } from './outline-create-resolution'
 
 export interface StageEntitiesToolDeps {
   sessionId: string
@@ -73,16 +78,22 @@ function renderCharacterText(c: {
 function renderOutlineText(item: {
   title?: string; conflict?: string; summary?: string; wordTarget?: string; volumeTitle?: string
   relatedCharacterIds?: string[]; relatedOrganizationIds?: string[]; relatedWorldviewIds?: string[]
-}): string {
+}, catalog: StagedReferenceCatalog): string {
   return [
     item.volumeTitle ? `所属分卷：${item.volumeTitle}` : '',
     item.title ? `标题：${item.title}` : '',
     item.wordTarget ? `字数目标：${item.wordTarget}` : '',
     item.conflict ? `核心冲突：${item.conflict}` : '',
     item.summary ? `摘要：${item.summary}` : '',
-    item.relatedCharacterIds?.length ? `关联角色 ID：${item.relatedCharacterIds.join(' / ')}` : '',
-    item.relatedOrganizationIds?.length ? `关联组织 ID：${item.relatedOrganizationIds.join(' / ')}` : '',
-    item.relatedWorldviewIds?.length ? `关联设定 ID：${item.relatedWorldviewIds.join(' / ')}` : ''
+    item.relatedCharacterIds?.length
+      ? `关联人物：${formatStagedReferenceNames(item.relatedCharacterIds, catalog, 'character')}`
+      : '',
+    item.relatedOrganizationIds?.length
+      ? `关联组织：${formatStagedReferenceNames(item.relatedOrganizationIds, catalog, 'organization')}`
+      : '',
+    item.relatedWorldviewIds?.length
+      ? `关联设定：${formatStagedReferenceNames(item.relatedWorldviewIds, catalog, 'worldview')}`
+      : ''
   ].filter(Boolean).join('\n')
 }
 
@@ -515,7 +526,7 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
     definition: {
       name: 'stage_outline',
       description:
-        '暂存大纲节点新增、修改或删除，不直接写库。create 需提供 volume_id/title/summary；volume_id 必须先由 list_outline_volumes 获取，不允许省略。update 修改 summary 时必须同时提供 conflict，根据新剧情更新、保留或传空字符串清空。新增或修改时应根据剧情填写 related_character_ids、related_organization_ids、related_worldview_ids。update 需提供 match_id 或 match_title；delete 需提供 match_id 或 match_title。',
+        '暂存大纲节点新增、修改或删除，不直接写库。create 需提供 volume_id/title/summary；volume_id 必须先由 list_outline_volumes 获取，不允许省略。同名 create 会自动判重：内容相同则跳过，内容不同则转为修改已有节点。update 修改 summary 时必须同时提供 conflict，根据新剧情更新、保留或传空字符串清空。新增或修改时应根据剧情填写 related_character_ids、related_organization_ids、related_worldview_ids。update 需提供 match_id 或 match_title；delete 需提供 match_id 或 match_title。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -581,7 +592,7 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
         if (!volume) {
           return { content: `分卷不存在：${volumeId}。请调用 list_outline_volumes 后使用有效的 volume_id。`, isError: true }
         }
-        const payload = {
+        const createPayload = {
           volumeId,
           title: readString(input, 'title'),
           wordTarget: readString(input, 'word_target'),
@@ -591,8 +602,62 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
           relatedOrganizationIds: organizationRefs.ids,
           relatedWorldviewIds: worldviewRefs.ids
         }
-        if (!payload.title || !payload.summary) {
+        if (!createPayload.title || !createPayload.summary) {
           return { content: 'create 需要提供 title 和 summary。', isError: true }
+        }
+
+        const sameTitle = view.workspace.outlineItems.find((item) =>
+          normalizeText(item.title) === normalizeText(createPayload.title)
+        )
+        const payload = sameTitle
+          ? {
+              ...createPayload,
+              wordTarget: hasOwn(input, 'word_target') ? createPayload.wordTarget : sameTitle.wordTarget,
+              conflict: hasOwn(input, 'conflict') ? createPayload.conflict : sameTitle.conflict,
+              relatedCharacterIds: hasOwn(input, 'related_character_ids')
+                ? createPayload.relatedCharacterIds
+                : sameTitle.relatedCharacterIds,
+              relatedOrganizationIds: hasOwn(input, 'related_organization_ids')
+                ? createPayload.relatedOrganizationIds
+                : sameTitle.relatedOrganizationIds,
+              relatedWorldviewIds: hasOwn(input, 'related_worldview_ids')
+                ? createPayload.relatedWorldviewIds
+                : sameTitle.relatedWorldviewIds
+            }
+          : createPayload
+        const resolution = resolveOutlineCreate(view.workspace.outlineItems, { id: '', ...payload })
+
+        if (resolution.kind === 'skip') {
+          return { content: `大纲节点「${payload.title}」已存在且内容一致，无需重复暂存。` }
+        }
+
+        if (resolution.kind === 'update') {
+          const convertedUpdateError = validateOutlineNarrativeUpdate({ ...input, action: 'update' })
+          if (convertedUpdateError) {
+            return {
+              content: `检测到同名大纲「${payload.title}」，应修改已有节点而不是重复新增。${convertedUpdateError}`,
+              isError: true
+            }
+          }
+          const before = resolution.existing
+          const change = deps.stagedStore.add({
+            sessionId: deps.sessionId,
+            turnId: deps.turnId,
+            kind: 'outline',
+            action: 'update',
+            entityId: before.id,
+            entityTitle: payload.title,
+            reason: `同名新增已自动转为修改：${reason}`,
+            before: renderOutlineText(before, view.workspace),
+            after: renderOutlineText({ ...payload, volumeTitle: volume.title }, view.workspace),
+            entityPayload: attachImpactWarnings(payload, buildOutlineUpdateImpactWarnings({
+              previousSummary: before.summary,
+              nextSummary: payload.summary,
+              previousConflict: before.conflict,
+              nextConflict: payload.conflict
+            }))
+          })
+          return { content: `检测到同名大纲「${payload.title}」，已自动转为修改已有节点并进入暂存区（change_id=${change.id}）。尚未写回，需用户确认。` }
         }
 
         const change = deps.stagedStore.add({
@@ -603,7 +668,7 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
           entityTitle: payload.title,
           reason,
           before: '',
-          after: renderOutlineText({ ...payload, volumeTitle: volume.title }),
+          after: renderOutlineText({ ...payload, volumeTitle: volume.title }, view.workspace),
           entityPayload: payload
         })
         return { content: `已暂存大纲新增（change_id=${change.id}）：${payload.title}，所属分卷：${volume.title}。尚未写回，需用户确认。` }
@@ -629,7 +694,7 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
           entityId: before.id,
           entityTitle: before.title,
           reason,
-          before: renderOutlineText(before),
+          before: renderOutlineText(before, view.workspace),
           after: '',
           entityPayload: attachImpactWarnings({}, buildDeleteImpactWarnings(view.workspace, 'outline', before.id))
         })
@@ -668,8 +733,8 @@ export function makeStageOutlineTool(deps: StageEntitiesToolDeps): Tool {
         entityId: before.id,
         entityTitle: payload.title || before.title,
         reason,
-        before: renderOutlineText(before),
-        after: renderOutlineText({ ...payload, volumeTitle: volume.title }),
+        before: renderOutlineText(before, view.workspace),
+        after: renderOutlineText({ ...payload, volumeTitle: volume.title }, view.workspace),
         entityPayload: attachImpactWarnings(payload, buildOutlineUpdateImpactWarnings({
           previousSummary: before.summary,
           nextSummary: payload.summary,

@@ -203,6 +203,47 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
     worldviewEntries: z.array(worldviewEntrySchema),
     outlineItems: z.array(outlineItemSchema)
   }),
+  'story-concept-options': z.object({
+    lockedFacts: stringList,
+    options: z.array(z.object({
+      id: stringField,
+      title: stringField,
+      logline: stringField,
+      coreHook: stringField,
+      protagonistDrive: stringField,
+      conflictEngine: stringField,
+      growthEngine: stringField,
+      longTermPromise: stringField,
+      differentiators: stringList,
+      referenceUsage: stringField,
+      similarityRisk: z.enum(['low', 'medium', 'high'])
+    }))
+  }),
+  'reference-project-blueprint': z.object({
+    blueprintSummary: stringField,
+    transformationNotes: stringList,
+    worldviewEntries: z.array(worldviewEntrySchema),
+    outlineVolumes: z.array(z.object({
+      title: stringField,
+      wordTarget: stringField.optional(),
+      summary: stringField
+    })),
+    outlineItems: z.array(z.object({
+      title: stringField,
+      wordTarget: stringField.optional(),
+      conflict: stringField,
+      summary: stringField,
+      relatedCharacterIds: stringList.optional(),
+      relatedOrganizationIds: stringList.optional(),
+      relatedWorldviewIds: stringList.optional(),
+      chapterPlan: z.array(z.object({
+        title: stringField,
+        conflict: stringField,
+        summary: stringField
+      })),
+      volumeIndex: z.number()
+    }))
+  }),
   'inspiration-pack': z.object({
     entries: z.array(z.object({
       type: stringField,

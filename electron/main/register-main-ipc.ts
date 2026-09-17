@@ -1,6 +1,6 @@
 import { BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { existsSync } from 'node:fs'
-import { cp, mkdir, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import * as XLSX from 'xlsx'
@@ -10,7 +10,13 @@ import { runAiTask } from './ai/runtime'
 import { indexReferenceNovel } from './ai/knowledge-retrieval'
 import { refreshRegistry as refreshSkillRegistry, toScanEntries as skillScanEntries, toContextEntries as skillContextEntries } from './ai/skills'
 import { getProjectSkillsDirPath as getSkillsDirPath } from './ai/skills/discovery'
-import { extractReferenceNovelContext, type ReferenceNovelLocalContext } from './referenceAnalysis'
+import { deleteImportedSkillAndCopies } from './ai/skills/storage'
+import { findImportableSkillDirectories, importSkillDirectories } from './ai/skills/skill-import'
+import {
+  assertReferenceTextUsable,
+  extractReferenceNovelContext,
+  type ReferenceNovelLocalContext
+} from './referenceAnalysis'
 import { fetchWithCache } from './github-mirror'
 import { fetchFanqieTrends } from './fanqie-trends'
 import { fetchQidianRank } from './qidian-rank'
@@ -29,6 +35,11 @@ import {
 } from './archive/project-archive'
 import type { WorkspacePayload } from './workspace-types'
 import type { WindowManager } from './window-manager'
+import {
+  APP_GITHUB_RELEASES_API,
+  APP_GITHUB_REPOSITORY,
+  APP_GITHUB_USER_AGENT
+} from './app-brand'
 
 type ReferenceNovelImportRequest = {
   settings: AiTaskPayload['settings']
@@ -226,8 +237,8 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
 
     const result = await dialog.showSaveDialog(window, {
       title: '导出项目归档包',
-      defaultPath: getProjectArchiveDefaultName(String(request.projectTitle ?? 'CharacterArc 项目')),
-      filters: [{ name: 'CharacterArc 项目归档', extensions: ['carc'] }]
+      defaultPath: getProjectArchiveDefaultName(String(request.projectTitle ?? '墨脉项目')),
+      filters: [{ name: '墨脉项目归档', extensions: ['carc'] }]
     })
 
     if (result.canceled || !result.filePath) {
@@ -261,7 +272,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
     const result = await dialog.showOpenDialog(window, {
       title: '选择项目归档包',
       properties: ['openFile'],
-      filters: [{ name: 'CharacterArc 项目归档', extensions: ['carc'] }]
+      filters: [{ name: '墨脉项目归档', extensions: ['carc'] }]
     })
 
     if (result.canceled || result.filePaths.length === 0) {
@@ -354,7 +365,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
     let activeVolumeId = ''
 
     const text = [
-      data.project?.title ? `# ${data.project.title}` : '# CharacterArc 导出',
+      data.project?.title ? `# ${data.project.title}` : '# 墨脉导出',
       '',
       ...(data.chapters ?? []).flatMap((chapter, index) => {
         const shouldPrintVolume = chapter.volumeId && chapter.volumeId !== activeVolumeId
@@ -451,7 +462,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
     ]
 
     const doc = new Document({
-      creator: 'CharacterArc',
+      creator: '墨脉',
       title: titleText,
       sections: [{ children: docParagraphs }]
     })
@@ -552,7 +563,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
     if (!window) return { success: false, canceled: true }
     const result = await dialog.showSaveDialog(window, {
       title: '下载大纲 Excel 模板',
-      defaultPath: 'CharacterArc-大纲导入模板.xlsx',
+      defaultPath: '墨脉-大纲导入模板.xlsx',
       filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }]
     })
     if (result.canceled || !result.filePath) return { success: false, canceled: true }
@@ -597,7 +608,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       volumes?: Array<{ id?: string; title?: string; wordTarget?: string; summary?: string }>
       items?: Array<{ volumeId?: string; title?: string; wordTarget?: string; conflict?: string; summary?: string; status?: string; sortOrder?: number }>
     }
-    const safeProjectTitle = String(request.projectTitle ?? 'CharacterArc').replace(/[\\/:*?"<>|]/g, '-').trim() || 'CharacterArc'
+    const safeProjectTitle = String(request.projectTitle ?? '墨脉').replace(/[\\/:*?"<>|]/g, '-').trim() || '墨脉'
     const result = await dialog.showSaveDialog(window, {
       title: '导出剧情大纲 Excel',
       defaultPath: `${safeProjectTitle}-剧情大纲.xlsx`,
@@ -743,9 +754,16 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
     const novelPath = join(getWorkspaceDirPath(), 'reference-novels', `${refId}.txt`)
     try {
       const content = await readFile(novelPath, 'utf-8')
+      assertReferenceTextUsable(content)
       return { success: true, content }
-    } catch {
-      return { success: false, error: '未找到该参考作品的原文存档，可能是旧版本导入的作品' }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : ''
+      return {
+        success: false,
+        error: errorMessage.includes('原文编码损坏')
+          ? errorMessage
+          : '未找到该参考作品的原文存档，可能是旧版本导入的作品，请重新导入。'
+      }
     }
   })
 
@@ -864,8 +882,8 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       // 保存原文到本地，供后续风格指纹提取等功能直接读取
       const novelStorageDir = join(getWorkspaceDirPath(), 'reference-novels')
       await mkdir(novelStorageDir, { recursive: true })
-      const rawNovelText = await readFile(importedFilePath, 'utf-8')
-      await writeFile(join(novelStorageDir, `${refId}.txt`), rawNovelText, 'utf-8')
+      const rawNovelText = localContext.sourceText
+      await writeFile(join(novelStorageDir, `${refId}.txt`), localContext.sourceText, 'utf-8')
 
       // 异步为原文建立向量索引（不阻塞导入流程）
       if (request.projectId) {
@@ -1123,8 +1141,8 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
         const refId = `ref-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
         const novelStorageDir = join(getWorkspaceDirPath(), 'reference-novels')
         await mkdir(novelStorageDir, { recursive: true })
-        const rawNovelText = await readFile(filePath, 'utf-8')
-        await writeFile(join(novelStorageDir, `${refId}.txt`), rawNovelText, 'utf-8')
+        const rawNovelText = localContext.sourceText
+        await writeFile(join(novelStorageDir, `${refId}.txt`), localContext.sourceText, 'utf-8')
 
         if (request.projectId) {
           indexReferenceNovel(request.settings, request.projectId, refId, rawNovelText).catch(() => {})
@@ -1434,34 +1452,20 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       const skillsRoot = getSkillsDirPath(resolvedProjectId)
       await mkdir(skillsRoot, { recursive: true })
 
-      const findSkillDirs = async (root: string): Promise<string[]> => {
-        if (existsSync(join(root, 'SKILL.md'))) return [root]
-        if (!existsSync(root)) return []
-        const nestedRoot = join(root, 'skills')
-        const searchRoot = existsSync(nestedRoot) ? nestedRoot : root
-        const entries = await readdir(searchRoot, { withFileTypes: true })
-        return entries
-          .filter((entry) => entry.isDirectory() && existsSync(join(searchRoot, entry.name, 'SKILL.md')))
-          .map((entry) => join(searchRoot, entry.name))
-      }
-
-      const sourceDirs = await findSkillDirs(selectedPath)
+      const sourceDirs = await findImportableSkillDirectories(selectedPath)
       if (!sourceDirs.length) {
         return { success: false, canceled: false, error: '所选目录中没有识别到可导入的 SKILL.md。' }
       }
 
-      const importedSkillIds: string[] = []
-      for (const sourceDir of sourceDirs) {
-        const targetDir = join(skillsRoot, basename(sourceDir))
-        await cp(sourceDir, targetDir, { recursive: true, force: true })
-        importedSkillIds.push(basename(sourceDir))
-      }
+      const importResult = await importSkillDirectories(sourceDirs, skillsRoot)
 
       await refreshSkillRegistry(resolvedProjectId)
       return {
         success: true,
         canceled: false,
-        importedSkillIds: importedSkillIds.sort((a, b) => a.localeCompare(b, 'zh-CN'))
+        importedSkillIds: importResult.importedSkillIds,
+        updatedSkillIds: importResult.updatedSkillIds,
+        skippedDuplicates: importResult.skippedDuplicates
       }
     } catch (error) {
       return { success: false, canceled: false, error: error instanceof Error ? error.message : '项目技能导入失败' }
@@ -1475,15 +1479,9 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
         return { success: false, error: 'Skill 标识无效。' }
       }
 
-      const sharedRoot = getSkillsDirPath()
-      const targetDir = join(sharedRoot, normalizedSkillId)
-      if (!existsSync(join(targetDir, 'SKILL.md'))) {
-        return { success: false, error: '只能删除用户导入的全局 Skill，内置 Skill 不会被删除。' }
-      }
-
-      await rm(targetDir, { recursive: true, force: false })
+      const deleted = await deleteImportedSkillAndCopies(normalizedSkillId)
       await refreshSkillRegistry()
-      return { success: true }
+      return { success: true, deletedCopyCount: deleted.deletedPaths.length }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : '删除全局 Skill 失败' }
     }
@@ -1527,8 +1525,8 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       const currentVersion = app.getVersion()
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), 15_000)
-      const response = await fetch('https://api.github.com/repos/uu201/character-arc/releases/latest', {
-        headers: { Accept: 'application/vnd.github.v3+json', 'User-Agent': 'CharacterArc-Desktop' },
+      const response = await fetch(APP_GITHUB_RELEASES_API, {
+        headers: { Accept: 'application/vnd.github.v3+json', 'User-Agent': APP_GITHUB_USER_AGENT },
         signal: controller.signal
       })
       clearTimeout(timer)
@@ -1569,7 +1567,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
 
   ipcMain.handle('characterarc:fetch-announcements', async () => {
     return fetchWithCache({
-      repo: 'uu201/character-arc',
+      repo: APP_GITHUB_REPOSITORY,
       branch: 'main',
       filePath: 'announcements.json',
       cacheDir: 'announcements-cache',
@@ -1582,7 +1580,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
 
   ipcMain.handle('characterarc:fetch-tutorial', async () => {
     return fetchWithCache({
-      repo: 'uu201/character-arc',
+      repo: APP_GITHUB_REPOSITORY,
       branch: 'main',
       filePath: 'tutorial.json',
       cacheDir: 'tutorial-cache',

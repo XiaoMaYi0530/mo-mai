@@ -1,4 +1,6 @@
 import type { SkillUsePolicy } from '@shared/assistant-runtime'
+import type { SkillPresetBindings } from '@shared/skill-presets'
+import type { ProjectStyleFingerprintBinding } from '@shared/style-fingerprint-binding'
 
 export type { SkillUsePolicy } from '@shared/assistant-runtime'
 
@@ -182,6 +184,8 @@ export interface ProjectSkillItem {
   enabled: boolean
   /** 适用阶段 */
   stageIds: NovelWorkflowStageId[]
+  /** 适用题材；general 表示通用题材。 */
+  genreIds?: import('@shared/skill-genres').SkillGenreId[]
 }
 
 /** 项目参考作品条目 */
@@ -335,10 +339,14 @@ export interface ProjectSummary {
   projectSkills: ProjectSkillItem[]
   /** AI 对话默认使用的 Skill 策略 */
   skillPolicy: SkillUsePolicy
+  /** 当前项目对五组内置 Skill 预设的自定义绑定。 */
+  skillPresetBindings: SkillPresetBindings
   /** 项目目标平台 */
   targetPlatform: string
   /** 本次用于生成创作记忆的参考作品 ID 列表（指向全局拆书库），可为空 */
   selectedReferenceWorkIds: string[]
+  /** 正文生成与润色统一使用的项目风格指纹绑定 */
+  styleFingerprintBinding: ProjectStyleFingerprintBinding
   /** 封面生成历史记录 */
   coverHistory: CoverGenerationHistoryItem[]
 }

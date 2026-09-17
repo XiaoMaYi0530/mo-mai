@@ -180,7 +180,7 @@ export function buildCoverPromptWorkbenchResult(input: CoverPromptWorkbenchInput
     referenceSignal,
     extraNotes ? `Additional art direction: ${extraNotes}.` : '',
     'Professional book cover, high detail digital painting, portrait 2:3 ratio, strong readability, no watermark.',
-    'Based on story-cover skill v1.0.0 prompt formula.'
+    'Use MoMai cover composition rules with clear commercial typography.'
   ].filter(Boolean).join(' ')
 
   const summary = [
@@ -194,7 +194,7 @@ export function buildCoverPromptWorkbenchResult(input: CoverPromptWorkbenchInput
     title: `${projectTitle}｜封面提示词`,
     summary,
     prompt,
-    keywords: [projectTitle, genre, platformStyle.platformLabel, '封面提示词', 'story-cover']
+    keywords: [projectTitle, genre, platformStyle.platformLabel, '封面提示词', '小说封面']
       .map((item) => item.trim())
       .filter(Boolean)
   }

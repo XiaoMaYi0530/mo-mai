@@ -20,8 +20,15 @@ export function buildPromptInput(
   extraCapabilities?: PromptCapabilityId[]
 ): PromptBuildInput {
   const capabilities = resolveCapabilities(task, extraCapabilities)
-  const capabilityPreamble = buildCapabilityContext(task.task, capabilities)
+  const baseCapabilityPreamble = buildCapabilityContext(task.task, capabilities)
   const skillsBlock = formatMountedSkills(skills)
+  const projectDigest = String(task.context.projectDigestBlock ?? '').trim()
+  const capabilityPreamble = projectDigest
+    ? {
+        ...baseCapabilityPreamble,
+        user: `${baseCapabilityPreamble.user}\n\n【AI 项目小结（自动派生，仅用于定位）】\n${projectDigest}`
+      }
+    : baseCapabilityPreamble
   const knowledgeBlock = formatRetrievedKnowledge(knowledgeContext?.usedKnowledge)
 
   return {

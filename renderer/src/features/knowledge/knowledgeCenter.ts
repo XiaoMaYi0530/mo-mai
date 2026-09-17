@@ -1,4 +1,5 @@
 import type { KnowledgeDocument, KnowledgeDocumentSourceType, ReferenceWorkItem } from '@/types/app'
+import { buildReferenceDeepAnalysisCoverage } from '../../../../electron/shared/reference-deep-analysis.ts'
 
 export type KnowledgeSourceScope = 'project' | 'reference'
 export type KnowledgeSourceFilter = 'all' | KnowledgeSourceScope | KnowledgeDocumentSourceType
@@ -66,6 +67,7 @@ export interface ReferenceAssetLibrary {
   updatedAtLabel: string
   primaryDocument: KnowledgeDocumentView | null
   relatedDocumentIds: string[]
+  deepAnalysisCoverage: ReturnType<typeof buildReferenceDeepAnalysisCoverage>
 }
 
 const PROJECT_SOURCE_TYPES = new Set<KnowledgeDocumentSourceType>([
@@ -320,8 +322,35 @@ function buildReferenceAssetLibrary(
     characterCount: Number(analysis?.characterCount ?? metadataCharacterCount ?? 0),
     updatedAtLabel: latestTimestamp ? formatKnowledgeDateTime(new Date(latestTimestamp).toISOString()) : '未知时间',
     primaryDocument,
-    relatedDocumentIds: sortedDocumentViews.map((item) => item.document.id)
+    relatedDocumentIds: sortedDocumentViews.map((item) => item.document.id),
+    deepAnalysisCoverage: buildReferenceDeepAnalysisCoverage(sortedDocumentViews.map((item) => item.document))
   }
+}
+
+/**
+ * Agent 拆书是一批可断点写入的知识，而不是一次完整来源重建。
+ * 只覆盖相同来源、相同 analysisKey 的旧维度，保留同书的其他已完成维度。
+ */
+export function upsertReferenceAnalysisDocuments(
+  existingDocuments: KnowledgeDocument[],
+  incomingDocuments: KnowledgeDocument[]
+): KnowledgeDocument[] {
+  const documentKeys = (document: KnowledgeDocument): string[] => {
+    const sourceTitle = normalizeKnowledgeText(String(document.metadata?.sourceTitle ?? document.sourceLabel ?? ''))
+    const referenceWorkId = String(document.metadata?.referenceWorkId ?? '').trim()
+    const analysisKey = String(document.metadata?.analysisKey ?? '').trim()
+    const documentKind = String(document.metadata?.documentKind ?? '').trim()
+    const stableKey = analysisKey || (documentKind === 'author-fingerprint' ? 'style' : normalizeKnowledgeText(document.title))
+    if (!stableKey) return []
+    return [referenceWorkId, sourceTitle].filter(Boolean).map((sourceKey) => `${sourceKey}::${stableKey}`)
+  }
+  const incomingKeys = new Set(incomingDocuments.flatMap(documentKeys))
+
+  const retained = existingDocuments.filter((document) => {
+    const keys = documentKeys(document)
+    return keys.length === 0 || !keys.some((key) => incomingKeys.has(key))
+  })
+  return [...retained, ...incomingDocuments]
 }
 
 export function isProjectKnowledgeSource(sourceType: KnowledgeDocumentSourceType): boolean {

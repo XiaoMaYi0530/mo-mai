@@ -1,5 +1,7 @@
 import { toRaw } from 'vue'
 import { normalizeSkillUsePolicy } from '@shared/assistant-runtime'
+import { normalizeSkillPresetBindings } from '@shared/skill-presets'
+import { normalizeStyleFingerprintBinding } from '@shared/style-fingerprint-binding'
 import { createDefaultWorkflowDocuments, normalizeWorkflowDocuments } from '@/features/novelWorkflow/documents'
 import { createDefaultNovelWorkflowStages, normalizeNovelWorkflowStages } from '@/features/novelWorkflow/stages'
 import { DEFAULT_CHAPTER_WORD_TARGET, normalizeChapterWordTarget } from '@/features/chapters/wordTarget'
@@ -104,10 +106,15 @@ export function normalizeProjectSummary(project: ProjectSummary): ProjectSummary
     novelWorkflowStages: normalizeNovelWorkflowStages(project.novelWorkflowStages),
     projectSkills: normalizeProjectSkills(project.projectSkills),
     skillPolicy: normalizeSkillUsePolicy(project.skillPolicy),
+    skillPresetBindings: normalizeSkillPresetBindings(project.skillPresetBindings),
     targetPlatform: project.targetPlatform?.trim() || '',
     selectedReferenceWorkIds: Array.isArray(project.selectedReferenceWorkIds)
       ? project.selectedReferenceWorkIds.map((id) => String(id).trim()).filter(Boolean)
       : [],
+    styleFingerprintBinding: normalizeStyleFingerprintBinding(
+      project.styleFingerprintBinding,
+      project.selectedReferenceWorkIds
+    ),
     coverHistory: normalizeCoverHistory(project.coverHistory)
   }
 }

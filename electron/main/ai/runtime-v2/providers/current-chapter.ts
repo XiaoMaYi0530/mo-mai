@@ -9,6 +9,7 @@ import type {
   SurfaceDefinition
 } from '@shared/assistant-runtime'
 import type { ContextProvider } from '../context-builder'
+import { chapterHtmlToPlainText } from '../../../../shared/chapter-text.ts'
 import {
   getProjectView,
   makeSlice,
@@ -19,17 +20,6 @@ import {
 
 /** 章节内容截断上限。v2 默认走长上下文窗口，尽量保留整章，最终由 ContextBuilder 压缩兜底。 */
 const CHAPTER_CONTENT_MAX_CHARS = 60000
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .trim()
-}
 
 export function makeCurrentChapterProvider(
   accessor: SnapshotAccessor
@@ -52,7 +42,7 @@ export function makeCurrentChapterProvider(
       const chapter = view.workspace.chapters.find((c) => c.id === chapterId)
       if (!chapter) return null
 
-      const plain = stripHtml(chapter.content)
+      const plain = chapterHtmlToPlainText(chapter.content)
       const truncated = plain.length > CHAPTER_CONTENT_MAX_CHARS
       const body = [
         `- 标题：${chapter.title}`,

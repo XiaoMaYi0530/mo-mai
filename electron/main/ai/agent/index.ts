@@ -4,7 +4,8 @@ import type {
   AiRunUsage,
   AiTaskKnowledgeContext,
   AiTaskPayload,
-  AiTaskResponse
+  AiTaskResponse,
+  ToolCallTrace
 } from '../shared-types'
 import { normalizeSettings, validateSettings, resolveMaxTokens, shouldOmitMaxTokens } from '../settings'
 import { getTaskHandler } from '../tasks'
@@ -23,12 +24,8 @@ import { createChapterTools } from './tools/chapter-tools'
 import { createProjectDataTools } from './tools/project-data-tools'
 import { buildAgentBehaviorRules, buildSkillIndex } from './system-prompt'
 import { formatAiErrorMessage } from '../error-message'
-
-function stripSkillFrontmatter(content: string): string {
-  const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/)
-  if (!match) return content
-  return content.slice(match[0].length)
-}
+import { buildSkillContentExcerpt } from '../skills/content-slice'
+import { annotateReferenceDeepAnalysisDocument } from '@shared/reference-deep-analysis'
 
 /**
  * 非流式 agent 各任务的工具循环步数上限。
@@ -68,7 +65,12 @@ export async function runAgentTask(
   const chapterId = String(task.context.chapterId ?? '').trim() || undefined
 
   const handler = getTaskHandler(task.task)
-  const { projectId, skills: candidateSkills, usedSkillIds } = await resolveTaskSkills(task)
+  const { projectId, skills: resolvedSkills } = await resolveTaskSkills(task)
+  const usesDirectFingerprintMethod = task.task === 'style-fingerprint-extract' || task.task === 'reference-deep-analyze'
+  const candidateSkills = usesDirectFingerprintMethod
+    ? resolvedSkills.filter((skill) => skill.id === 'style-fingerprint')
+    : resolvedSkills
+  const usedSkillIds = candidateSkills.map((skill) => skill.id)
   logSelection(task.task, candidateSkills, knowledgeContext?.usedKnowledge ?? [])
   await enrichTaskContextForGeneration(task, settings)
 
@@ -83,11 +85,15 @@ export async function runAgentTask(
     .filter((s): s is NonNullable<typeof s> => Boolean(s))
 
   const requiredSkillDefs = candidateSkillDefs.filter((s) => s.manifest.required)
-  const optionalSkillDefs = candidateSkillDefs.filter((s) => !s.manifest.required)
+  const directlyInjectedSkillDefs = usesDirectFingerprintMethod
+    ? candidateSkillDefs.filter((skill) => skill.id === 'style-fingerprint')
+    : requiredSkillDefs
+  const directlyInjectedSkillIds = new Set(directlyInjectedSkillDefs.map((skill) => skill.id))
+  const optionalSkillDefs = candidateSkillDefs.filter((skill) => !directlyInjectedSkillIds.has(skill.id))
 
-  const requiredSkillBlock = requiredSkillDefs.length
-    ? `\n\n## 强制生效的 SKILLS（已直接注入，无需调用 skill_load）\n\n${requiredSkillDefs.map((s) => {
-        const body = stripSkillFrontmatter(s.content).trim().slice(0, 2000)
+  const requiredSkillBlock = directlyInjectedSkillDefs.length && !usesDirectFingerprintMethod
+    ? `\n\n## 已直接注入的 SKILLS（无需调用 skill_load 或 skill_read_reference）\n\n${directlyInjectedSkillDefs.map((s) => {
+        const body = buildSkillContentExcerpt(s, task, usesDirectFingerprintMethod ? 5200 : 2400)
         return `### ${s.name}\n${body}`
       }).join('\n\n')}`
     : ''
@@ -115,6 +121,7 @@ export async function runAgentTask(
     resolveSkill: (id) => getSkillById(id, projectId || undefined),
     listSkills: () => getAllSkills(projectId || undefined),
     resolveSkillEnabled: (skill) => isSkillEnabledForTask(task, skill.id, projectId),
+    resolveSkillLoadContent: (skill) => buildSkillContentExcerpt(skill, task),
     allowScriptExecution: (skill) => skill.scope === 'builtin'
   })
 
@@ -122,7 +129,11 @@ export async function runAgentTask(
   const referenceTitle = String(task.context.referenceTitle ?? task.context.sourceTitle ?? '').trim()
   const knowledgeTools = createKnowledgeTools({
     collectDocument: (doc) => {
-      producedKnowledgeDocuments.push(doc)
+      producedKnowledgeDocuments.push(
+        task.task === 'reference-deep-analyze'
+          ? annotateReferenceDeepAnalysisDocument(doc, String(task.context.referenceWorkId ?? '').trim())
+          : doc
+      )
     },
     defaultSourceLabel: referenceTitle || 'agent'
   })
@@ -136,26 +147,66 @@ export async function runAgentTask(
 
   const projectDataTools = createProjectDataTools()
 
-  const tools = [...skillTools, ...knowledgeTools, ...chapterTools, ...projectDataTools]
+  // 拆书任务的原文和方法论均已直接注入，只开放落库工具，避免模型先后加载
+  // Skill/项目资料，在真正保存前耗尽 Codex CLI 的输入预算。
+  const tools = task.task === 'style-fingerprint-extract' || task.task === 'reference-deep-analyze'
+    ? knowledgeTools
+    : [...skillTools, ...knowledgeTools, ...chapterTools, ...projectDataTools]
   const controller = new AbortController()
 
   logPrompt('AGENT_REQUEST', settings, { system: systemPrompt, user: prompt.user }, task.task, usedSkillIds)
   const requestStartedAt = Date.now()
   let totalUsage: AiRunUsage | undefined
+  let loopResult: Awaited<ReturnType<typeof runAgent>> | undefined
+  let lastAgentText = ''
+  const observedToolCalls: ToolCallTrace[] = []
+  const observedToolCallIndex = new Map<string, number>()
+  const agentHandlers: AiAgentStreamHandlers = {
+    ...NOOP_AGENT_HANDLERS,
+    onToolUseStart: (toolUseId, tool, args) => {
+      observedToolCallIndex.set(toolUseId, observedToolCalls.length)
+      observedToolCalls.push({ tool, args, durationMs: 0, status: 'ok' })
+    },
+    onToolResult: (toolUseId, _tool, content, isError, durationMs) => {
+      const index = observedToolCallIndex.get(toolUseId)
+      if (index === undefined) return
+      observedToolCalls[index] = {
+        ...observedToolCalls[index],
+        durationMs,
+        status: isError ? 'error' : 'ok',
+        ...(isError ? { error: content.slice(0, 240) } : {})
+      }
+    }
+  }
 
   try {
-    const loopResult = await runAgent({
+    loopResult = await runAgent({
       settings,
       systemPrompt,
       userPrompt: prompt.user,
       tools,
       ctx: { signal: controller.signal, projectId },
-      handlers: NOOP_AGENT_HANDLERS,
+      handlers: agentHandlers,
       maxTokens,
-      maxSteps: resolveAgentMaxSteps(task.task)
+      maxSteps: resolveAgentMaxSteps(task.task),
+      requiredToolNames: task.task === 'reference-deep-analyze' || task.task === 'style-fingerprint-extract'
+        ? ['knowledge_save_document']
+        : undefined
     })
     totalUsage = addAiRunUsage(totalUsage, loopResult.usage)
+    lastAgentText = loopResult.finalText
     logResponse('AGENT_REQUEST', settings, task.task, loopResult.finalText, Date.now() - requestStartedAt, { usedSkills: usedSkillIds })
+
+    if (
+      (task.task === 'reference-deep-analyze' || task.task === 'style-fingerprint-extract')
+      && producedKnowledgeDocuments.length === 0
+    ) {
+      throw new Error(
+        task.task === 'style-fingerprint-extract'
+          ? '风格指纹分析已结束，但没有生成可保存的指纹文档。本次不再误报成功，请重试或切换模型。'
+          : '深度拆书已结束，但没有生成任何知识文档。本次不再误报成功，请重试或切换模型。'
+      )
+    }
 
     let rawText = loopResult.finalText
     let result: ReturnType<typeof handler.normalize>
@@ -217,15 +268,23 @@ export async function runAgentTask(
     return { result, meta }
   } catch (error) {
     const finishedAt = new Date().toISOString()
-    const message = formatAiErrorMessage(error, 'AI 调用失败')
+    const baseMessage = formatAiErrorMessage(error, 'AI 调用失败')
+    const message = task.task === 'reference-deep-analyze' && producedKnowledgeDocuments.length > 0
+      ? `本轮已保存 ${producedKnowledgeDocuments.length} 个拆书维度，后续步骤未完成：${baseMessage}。可点击“继续深度拆书”补齐剩余维度。`
+      : baseMessage
     logError('AGENT_REQUEST', settings, task.task, error, Date.now() - requestStartedAt, { usedSkills: usedSkillIds })
     const meta = buildRunMeta(
       task.task, projectId, chapterId, settings, 'error',
       startedAt, finishedAt,
       totalUsage,
       knowledgeContext?.usedKnowledge ?? [], usedSkillIds,
-      false, '', message
+      false, lastAgentText, message
     )
+    meta.toolCalls = loopResult?.toolCalls ?? observedToolCalls
+    if (loopResult?.iterations) meta.agentIterations = loopResult.iterations
+    if (producedKnowledgeDocuments.length > 0) {
+      meta.producedKnowledgeDocuments = producedKnowledgeDocuments
+    }
     throw Object.assign(new Error(message), { aiRunMeta: meta })
   }
 }

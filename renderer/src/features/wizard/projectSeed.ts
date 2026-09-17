@@ -10,6 +10,7 @@ import type {
   OrganizationMembership,
   WorldviewEntry
 } from '@/types/app'
+import type { ProjectStyleFingerprintBinding } from '@shared/style-fingerprint-binding'
 import { createOutlineVolume } from '@/features/workspace/outlineVolumes'
 import { normalizeWorldviewType } from '@shared/worldview-type'
 
@@ -33,6 +34,52 @@ export interface ProjectBootstrapResult {
     conflict?: string
     summary?: string
   }>
+}
+
+export interface ReferenceProjectBlueprintResult {
+  blueprintSummary: string
+  transformationNotes: string[]
+  worldviewEntries: Array<{
+    type?: string
+    title?: string
+    content?: string
+  }>
+  outlineVolumes: Array<{
+    title: string
+    wordTarget: string
+    summary: string
+  }>
+  outlineItems: Array<{
+    title?: string
+    wordTarget?: string
+    conflict?: string
+    summary?: string
+    volumeIndex: number
+    chapterPlan?: Array<{
+      title?: string
+      conflict?: string
+      summary?: string
+    }>
+  }>
+}
+
+export interface StoryConceptOption {
+  id: string
+  title: string
+  logline: string
+  coreHook: string
+  protagonistDrive: string
+  conflictEngine: string
+  growthEngine: string
+  longTermPromise: string
+  differentiators: string[]
+  referenceUsage: string
+  similarityRisk: 'low' | 'medium' | 'high'
+}
+
+export interface StoryConceptOptionsResult {
+  lockedFacts: string[]
+  options: StoryConceptOption[]
 }
 
 export interface SpiralBootstrapResult {
@@ -67,6 +114,8 @@ export interface ProjectWorkspaceSeed {
     writingStylePresetId: string
     writingStylePrompt: string
     chapterAssistantTemplates: ChapterAssistantPromptTemplate[]
+    selectedReferenceWorkIds?: string[]
+    styleFingerprintBinding?: ProjectStyleFingerprintBinding
   }
   worldviewEntries: WorldviewEntry[]
   characters: CharacterCard[]
@@ -76,6 +125,89 @@ export interface ProjectWorkspaceSeed {
   outlineVolumes: OutlineVolume[]
   outlineItems: OutlineItem[]
   chapters: ChapterDraft[]
+}
+
+/** 将已审阅的“拆书转原创骨架”结果写成标准项目种子，不另建一套项目数据结构。 */
+export function createProjectWorkspaceSeedFromReferenceBlueprint(
+  values: ProjectWizardValues,
+  blueprint: ReferenceProjectBlueprintResult,
+  referenceWorkIds: string[]
+): ProjectWorkspaceSeed {
+  const base = createProjectWorkspaceSeed(values, {
+    worldviewEntries: blueprint.worldviewEntries,
+    outlineItems: []
+  })
+  const timestamp = Date.now()
+  const preset = resolveNovelLengthPreset(values.novelLength)
+  const outlineVolumes = (blueprint.outlineVolumes.length ? blueprint.outlineVolumes : [{
+    title: '故事开端',
+    wordTarget: preset.volumeWordTarget,
+    summary: blueprint.blueprintSummary || values.premise
+  }]).map((volume, index) => createOutlineVolume({
+    id: createSeedId('volume', index, timestamp),
+    title: volume.title?.trim() || `第 ${index + 1} 卷`,
+    wordTarget: String(volume.wordTarget ?? '').replace(/[^0-9]/g, '') || preset.volumeWordTarget,
+    summary: volume.summary?.trim() || blueprint.blueprintSummary || preset.volumeSummary
+  }))
+
+  const outlineItems = blueprint.outlineItems.map((item, index) => {
+    const rawVolumeIndex = Number(item.volumeIndex)
+    const volumeIndex = Math.min(
+      outlineVolumes.length - 1,
+      Math.max(0, Number.isFinite(rawVolumeIndex) ? Math.trunc(rawVolumeIndex) : 0)
+    )
+    return {
+      id: createSeedId('outline', index, timestamp),
+      volumeId: outlineVolumes[volumeIndex].id,
+      title: normalizeOutlineBeatTitle(item.title, index),
+      wordTarget: normalizeChapterWordTarget(item.wordTarget, values.novelLength, preset.chapterWordTarget),
+      conflict: item.conflict?.trim() || '待补充冲突。',
+      summary: item.summary?.trim() || '待补充剧情摘要。',
+      status: 'planned' as const,
+      sortOrder: index
+    }
+  })
+  let chapterIndex = 0
+  const chapters = outlineItems.flatMap((item, outlineIndex) => {
+    const source = blueprint.outlineItems[outlineIndex]
+    const plans = source?.chapterPlan?.length ? source.chapterPlan : [{
+      title: source?.title,
+      conflict: source?.conflict,
+      summary: source?.summary
+    }]
+    return plans.map((plan) => {
+      const index = chapterIndex++
+      const summary = plan.summary?.trim() || item.summary
+      const conflict = plan.conflict?.trim()
+      return {
+        id: createSeedId('chapter', index, timestamp),
+        outlineItemId: item.id,
+        volumeId: item.volumeId,
+        title: normalizeChapterTitle(plan.title || item.title, index),
+        summary: conflict && !summary.includes(conflict) ? `${summary}\n本章冲突：${conflict}` : summary,
+        status: 'draft' as const,
+        wordTarget: item.wordTarget,
+        content: ''
+      }
+    })
+  })
+
+  return {
+    ...base,
+    project: {
+      ...base.project,
+      selectedReferenceWorkIds: [...new Set(referenceWorkIds.map((id) => id.trim()).filter(Boolean))],
+      styleFingerprintBinding: {
+        version: 1,
+        primaryReferenceWorkId: referenceWorkIds.map((id) => id.trim()).find(Boolean) ?? '',
+        primaryWeight: 100,
+        auxiliary: []
+      }
+    },
+    outlineVolumes,
+    outlineItems,
+    chapters: chapters.length ? chapters : base.chapters
+  }
 }
 
 interface NovelLengthPreset {
@@ -115,6 +247,14 @@ function normalizeChapterTitle(value: unknown, index: number): string {
     .replace(/^\s*第[^章]{1,12}章\s*[:：、.．-]?\s*/u, '')
     .replace(/^\s*\d+\s*[.．、:：-]\s*/u, '')
   return `第${index + 1}章：${withoutPrefix || '剧情节拍'}`
+}
+
+function normalizeOutlineBeatTitle(value: unknown, index: number): string {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  return raw
+    .replace(/^\s*第[^章]{1,12}章\s*[:：、.．-]?\s*/u, '')
+    .replace(/^\s*\d+\s*[.．、:：-]\s*/u, '')
+    || `剧情节点 ${index + 1}`
 }
 
 function normalizeChapterWordTarget(value: unknown, novelLength: NovelLength, fallback: string): string {

@@ -1,4 +1,4 @@
-import type { SkillCompatibility, SkillManifest } from './types'
+import type { SkillCompatibility, SkillManifest, SkillReferenceRule } from './types'
 
 /** 用户在 frontmatter 中显式覆盖的 skill 属性 */
 export type SkillFrontmatterOverrides = {
@@ -125,7 +125,7 @@ function parseManifestBlock(frontmatter: string): {
   if (typeof result.compatibilityNote === 'string') overrides.compatibilityNote = result.compatibilityNote
   if (typeof result.enabled === 'boolean') overrides.enabled = result.enabled
 
-  const manifestKeys = ['category', 'tasks', 'stages', 'triggers', 'priority', 'required']
+  const manifestKeys = ['category', 'tasks', 'stages', 'genres', 'triggers', 'priority', 'exclusiveGroup', 'references', 'required']
   const hasManifestField = manifestKeys.some((k) => result[k] !== undefined)
   if (!hasManifestField) return { manifest: null, overrides }
 
@@ -133,12 +133,63 @@ function parseManifestBlock(frontmatter: string): {
     category: typeof result.category === 'string' ? result.category as SkillManifest['category'] : undefined,
     tasks: Array.isArray(result.tasks) ? result.tasks as SkillManifest['tasks'] : undefined,
     stages: Array.isArray(result.stages) ? result.stages as SkillManifest['stages'] : undefined,
+    genres: Array.isArray(result.genres) ? result.genres as SkillManifest['genres'] : undefined,
     triggers: Array.isArray(result.triggers) ? result.triggers as string[] : undefined,
     priority: typeof result.priority === 'number' ? result.priority : undefined,
+    exclusiveGroup: typeof result.exclusiveGroup === 'string' ? result.exclusiveGroup : undefined,
+    references: parseReferenceRules(lines),
     required: result.required === true ? true : undefined
   }
 
   return { manifest, overrides }
+}
+
+/**
+ * 解析 manifest.references 的嵌套 YAML 子集。
+ * 这里有意只支持 Skill 清单用到的 file/loadWhen/task/chapterIndexMax，
+ * 避免把对象列表误当成字符串列表后被校验器静默丢弃。
+ */
+function parseReferenceRules(lines: string[]): SkillReferenceRule[] | undefined {
+  const start = lines.findIndex((line) => /^\s{2}references:\s*$/.test(line))
+  if (start < 0) return undefined
+
+  const rules: SkillReferenceRule[] = []
+  let current: SkillReferenceRule | null = null
+
+  const flush = (): void => {
+    if (current?.file) rules.push(current)
+    current = null
+  }
+
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (/^\s{2}[A-Za-z0-9_-]+:/.test(line)) break
+
+    const fileMatch = line.match(/^\s{4}-\s*file:\s*(.+)$/)
+    if (fileMatch) {
+      flush()
+      current = { file: stripYamlScalar(fileMatch[1]) }
+      continue
+    }
+    if (!current) continue
+
+    const taskMatch = line.match(/^\s{8}task:\s*(.+)$/)
+    if (taskMatch) {
+      current.loadWhen ??= {}
+      current.loadWhen.task = stripYamlScalar(taskMatch[1]) as NonNullable<SkillReferenceRule['loadWhen']>['task']
+      continue
+    }
+    const chapterIndexMatch = line.match(/^\s{8}chapterIndexMax:\s*(.+)$/)
+    if (chapterIndexMatch) {
+      const value = Number(stripYamlScalar(chapterIndexMatch[1]))
+      if (Number.isFinite(value)) {
+        current.loadWhen ??= {}
+        current.loadWhen.chapterIndexMax = value
+      }
+    }
+  }
+  flush()
+  return rules
 }
 
 /** 去除 YAML 标量值两端的引号并 trim */

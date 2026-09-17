@@ -1,5 +1,6 @@
 import type { SkillManifest } from './types'
 import type { SkillReferenceRule } from './types'
+import { normalizeSkillGenreIds } from '../../../shared/skill-genres'
 
 /**
  * 校验并过滤 manifest 字段，剔除不合法的值
@@ -13,9 +14,13 @@ export function validateManifest(raw: Partial<SkillManifest> | null): Partial<Sk
     category: isValidCategory(raw.category) ? raw.category : undefined,
     tasks: Array.isArray(raw.tasks) ? raw.tasks.filter((t) => typeof t === 'string') : undefined,
     stages: Array.isArray(raw.stages) ? raw.stages.filter((s) => typeof s === 'string') : undefined,
+    genres: Array.isArray(raw.genres) ? normalizeSkillGenreIds(raw.genres) : undefined,
     triggers: Array.isArray(raw.triggers) ? raw.triggers.filter((t) => typeof t === 'string') : undefined,
     priority: typeof raw.priority === 'number' && raw.priority >= 0 && raw.priority <= 10 ? raw.priority : undefined,
     references: Array.isArray(raw.references) ? raw.references.filter(isValidReference) : undefined,
+    exclusiveGroup: typeof raw.exclusiveGroup === 'string' && raw.exclusiveGroup.trim()
+      ? raw.exclusiveGroup.trim()
+      : undefined,
     required: raw.required === true ? true : undefined
   }
 }

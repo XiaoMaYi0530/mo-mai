@@ -84,7 +84,7 @@ export function logSelection(
     ? skills.map((s, i) => {
         const b = s.scoreBreakdown
         const detail = b
-          ? ` [task=${b.task} stage=${b.stage} trig=${b.trigger} narr=${b.narrative} len=${b.length} prio=${b.priority.toFixed(1)}]`
+          ? ` [task=${b.task} stage=${b.stage} genre=${b.genre} trig=${b.trigger} narr=${b.narrative} len=${b.length} prio=${b.priority.toFixed(1)}]`
           : ''
         return `  ${i + 1}. ${s.id} (score=${s.score.toFixed(1)}${detail}, refs=${s.referenceContents.length}, content=${s.content.length}字)`
       })

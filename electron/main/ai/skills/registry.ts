@@ -129,7 +129,8 @@ export function toScanEntries(projectId?: string): SkillScanEntry[] {
     source: s.source,
     referencesCount: s.referencesCount,
     enabled: s.enabled,
-    stageIds: s.manifest.stages
+    stageIds: s.manifest.stages,
+    genreIds: s.manifest.genres
   }))
 }
 

@@ -1,7 +1,32 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { mergeAppSettingsIntoWorkspaceSnapshot, normalizeAppSettings, normalizeWorkspacePayload } from './workspace-types.ts'
+import {
+  mergeAppSettingsIntoWorkspaceSnapshot,
+  normalizeAppSettings,
+  normalizeProjectRecord,
+  normalizeWorkspacePayload
+} from './workspace-types.ts'
+
+test('项目级 Skill 预设绑定会持久化，并清理未知预设与重复 Skill', () => {
+  const project = normalizeProjectRecord({
+    id: 'project-skill-bindings',
+    skillPolicy: { mode: 'only', skillIds: ['skill-a'], presetId: 'outline' },
+    skillPresetBindings: {
+      draft: [' skill-a ', 'skill-a', 'skill-b'],
+      unknown: ['skill-x']
+    }
+  })
+
+  assert.deepEqual(project.skillPresetBindings, {
+    draft: ['skill-a', 'skill-b']
+  })
+  assert.deepEqual(project.skillPolicy, {
+    mode: 'only',
+    skillIds: ['skill-a'],
+    presetId: 'outline'
+  })
+})
 
 test('采样惩罚参数按 -2 到 2 规范化，缺失值保持为空', () => {
   const normalized = normalizeAppSettings({

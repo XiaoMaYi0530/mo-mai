@@ -69,6 +69,8 @@ export type AiTaskName =
   | 'ranking-idea-combinations'
   | 'reference-deep-analyze'
   | 'style-fingerprint-extract'
+  | 'story-concept-options'
+  | 'reference-project-blueprint'
   | 'workflow-documents'
   | 'assistant-intent'
   | 'assistant-action-proposal'
@@ -349,6 +351,44 @@ export type ProjectBootstrapResult = {
   outlineItems: OutlineResult[]
 }
 
+/** 基于拆书资产生成、待用户审阅后才创建项目的原创骨架。 */
+export type ReferenceProjectBlueprintResult = {
+  blueprintSummary: string
+  transformationNotes: string[]
+  worldviewEntries: WorldviewResult[]
+  outlineVolumes: Array<{
+    title: string
+    wordTarget: string
+    summary: string
+  }>
+  outlineItems: Array<OutlineResult & {
+    volumeIndex: number
+    chapterPlan: Array<{
+      title: string
+      conflict: string
+      summary: string
+    }>
+  }>
+}
+
+/** 创建小说前的创意发散结果。候选路线必须共享用户已经锁定的原创事实。 */
+export type StoryConceptOptionsResult = {
+  lockedFacts: string[]
+  options: Array<{
+    id: string
+    title: string
+    logline: string
+    coreHook: string
+    protagonistDrive: string
+    conflictEngine: string
+    growthEngine: string
+    longTermPromise: string
+    differentiators: string[]
+    referenceUsage: string
+    similarityRisk: 'low' | 'medium' | 'high'
+  }>
+}
+
 /** 小说创建向导中的简介优化结果 */
 export type PremiseEnhanceResult = {
   premise: string
@@ -566,6 +606,8 @@ export type AiTaskResult =
   | AssistantIntentResult
   | AssistantActionProposalResult
   | ProjectBootstrapResult
+  | StoryConceptOptionsResult
+  | ReferenceProjectBlueprintResult
   | PremiseEnhanceResult
   | WorkflowDocumentsResult
   | WorkflowStageDocumentsResult

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { applyExternalAiTaskEvent } from './taskRegistry.ts'
+import { applyExternalAiTaskEvent, restoreAiTaskRuns, serializeAiTaskRuns } from './taskRegistry.ts'
 
 function event(runId, stage) {
   return {
@@ -13,6 +13,17 @@ function event(runId, stage) {
     finishedAt: stage === 'running' ? undefined : 200
   }
 }
+
+test('应用重启后把运行中任务恢复为可重试的中断记录', () => {
+  const startedAt = 100
+  const serialized = serializeAiTaskRuns(new Map([['deep', {
+    key: 'deep', kind: 'reference', label: '深度拆书', startedAt, stage: 'running', onCancel: () => {}
+  }]]))
+  assert.doesNotMatch(serialized, /onCancel/)
+  const restored = restoreAiTaskRuns(serialized, 200)
+  assert.equal(restored.get('deep')?.stage, 'error')
+  assert.match(restored.get('deep')?.error ?? '', /中断/)
+})
 
 test('主进程后台任务事件可从 running 收敛到 done', () => {
   const running = applyExternalAiTaskEvent(new Map(), event('run-a', 'running'))

@@ -325,6 +325,8 @@ async function handleCommit(ids?: string[]): Promise<void> {
         :mode-label="currentMode.label"
         :skill-policy="assistant.skillPolicy.value"
         :available-skills="assistant.availableSkills.value"
+        :project-genre="appStore.currentProject?.genre ?? ''"
+        :skill-preset-bindings="appStore.currentProject?.skillPresetBindings ?? {}"
         :turn-preview="assistant.turnPreview.value"
         :is-previewing="assistant.isPreviewing.value"
         @send="sendWithMode"

@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { getWorkspaceDirPath } from './workspace-store'
+import { APP_GITHUB_USER_AGENT } from './app-brand'
 
 /**
  * GitHub 多镜像抓取 + 本地磁盘缓存（公共工具）。
@@ -104,7 +105,7 @@ async function fetchJsonFromMirrors(
         + (filePath.includes('?') ? '' : `?t=${Date.now()}`)
       const res = await fetch(url, {
         cache: 'no-store',
-        headers: { 'User-Agent': 'CharacterArc-Desktop' },
+        headers: { 'User-Agent': APP_GITHUB_USER_AGENT },
         signal: controller.signal
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -124,7 +125,7 @@ async function fetchJsonFromMirrors(
 // ── 公开 API ──
 
 export type FetchWithCacheOptions = {
-  /** GitHub 仓库，如 `'uu201/character-arc'` */
+  /** GitHub 仓库，如 `'15810785091/mo-mai'` */
   repo: string
   /** 分支名，如 `'main'` */
   branch: string

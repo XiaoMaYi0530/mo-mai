@@ -14,6 +14,7 @@ import { ensureWorkspaceDb } from '../../workspace-store'
 import type { WorkflowDocumentKey } from '../../workspace-types'
 import { commitChapterEdit } from '../agent/tools/chapter-data-access'
 import type { StagedChangeCommitter } from './staged-changes-store'
+import { assessChapterReplacementRisk } from '../../../shared/chapter-edit-safety.ts'
 
 /**
  * 缺 projectId 的问题：`commitChapterEdit(projectId, chapterId, ...)` 需要 projectId。
@@ -494,7 +495,36 @@ async function commitOutline(
   if (change.action === 'create') {
     const duplicate = db.prepare('SELECT id FROM outline_items WHERE project_id = ? AND TRIM(title) = ?')
       .get(projectId, title) as { id: string } | undefined
-    if (duplicate) return conflictResult(change, '大纲节点', title)
+    // 兼容升级前已经进入暂存区的重复 create：用户确认后应修改同名节点，
+    // 而不是留下一个只能忽略、还需重新让 AI 生成的失败卡片。
+    if (duplicate) {
+      db.prepare(`
+        UPDATE outline_items
+        SET volume_id = ?, title = ?,
+          word_target = CASE WHEN ? <> '' THEN ? ELSE word_target END,
+          conflict = CASE WHEN ? <> '' THEN ? ELSE conflict END,
+          summary = ?,
+          related_character_ids_json = CASE WHEN ? = 1 THEN ? ELSE related_character_ids_json END,
+          related_organization_ids_json = CASE WHEN ? = 1 THEN ? ELSE related_organization_ids_json END,
+          related_worldview_ids_json = CASE WHEN ? = 1 THEN ? ELSE related_worldview_ids_json END
+        WHERE id = ? AND project_id = ?
+      `).run(
+        volumeId, title,
+        wordTarget, wordTarget,
+        conflict, conflict,
+        summary,
+        relatedCharacterIds.length > 0 ? 1 : 0, JSON.stringify(relatedCharacterIds),
+        relatedOrganizationIds.length > 0 ? 1 : 0, JSON.stringify(relatedOrganizationIds),
+        relatedWorldviewIds.length > 0 ? 1 : 0, JSON.stringify(relatedWorldviewIds),
+        duplicate.id, projectId
+      )
+      return {
+        changeId: change.id,
+        ok: true,
+        entityId: duplicate.id,
+        warning: `检测到同名大纲「${title}」，已更新已有节点，没有重复新增。`
+      }
+    }
     const id = `outline-${randomUUID()}`
     const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM outline_items WHERE project_id = ? AND volume_id = ?')
       .get(projectId, volumeId) as { value: number } | undefined
@@ -782,6 +812,22 @@ async function commitChapter(
   }
   if (!change.chapterHtml) {
     return { changeId: change.id, ok: false, error: '章节正文变更缺少 chapterHtml' }
+  }
+  const replacementRisk = assessChapterReplacementRisk({
+    oldHtml: change.chapterHtml.old,
+    newHtml: change.chapterHtml.new,
+    search: change.before,
+    replacement: change.after
+  })
+  if (replacementRisk.unsafe) {
+    return {
+      changeId: change.id,
+      ok: false,
+      errorCode: 'INVALID_CHANGE',
+      message: '检测到危险的章节替换：局部定位片段过短，但替换内容接近整章，写回已阻止。',
+      suggestion: '请忽略这条提案，并重新使用“整章润色/重写”；系统会按整章替换生成可逐句审阅的新提案。',
+      retryable: false
+    }
   }
   try {
     await commitChapterEdit(

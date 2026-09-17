@@ -22,6 +22,8 @@ export type ReferenceNovelLocalContext = {
   title: string
   fileName: string
   fileType: ReferenceFileType
+  /** 已完成编码识别、可直接持久化和送入 AI 的规范化全文。 */
+  sourceText: string
   excerpt: string
   analysisSample: string
   characterCount: number
@@ -29,6 +31,11 @@ export type ReferenceNovelLocalContext = {
   topKeywords: string[]
   metrics: ReferenceStyleMetric[]
   analysisChunks: ReferenceNovelChunk[]
+}
+
+export type DecodedReferenceNovel = {
+  text: string
+  encoding: 'UTF-8 BOM' | 'UTF-8' | 'UTF-16 LE' | 'UTF-16 BE' | 'GB18030'
 }
 
 type JiebaRuntime = {
@@ -245,6 +252,57 @@ function normalizeNovelText(rawText: string): string {
     .trim()
 }
 
+function decodeWith(buffer: Buffer, encoding: string): string | null {
+  try {
+    return new TextDecoder(encoding, { fatal: true }).decode(buffer)
+  } catch {
+    return null
+  }
+}
+
+/** TXT/Markdown 统一编码入口，避免导入分析和原文存档使用两套解码规则。 */
+export function decodeReferenceNovelBuffer(buffer: Buffer): DecodedReferenceNovel {
+  if (buffer.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) {
+    return { text: normalizeNovelText(buffer.subarray(3).toString('utf8')), encoding: 'UTF-8 BOM' }
+  }
+  if (buffer.subarray(0, 2).equals(Buffer.from([0xff, 0xfe]))) {
+    return {
+      text: normalizeNovelText(new TextDecoder('utf-16le').decode(buffer.subarray(2))),
+      encoding: 'UTF-16 LE'
+    }
+  }
+  if (buffer.subarray(0, 2).equals(Buffer.from([0xfe, 0xff]))) {
+    return {
+      text: normalizeNovelText(new TextDecoder('utf-16be').decode(buffer.subarray(2))),
+      encoding: 'UTF-16 BE'
+    }
+  }
+
+  const utf8Text = decodeWith(buffer, 'utf-8')
+  if (utf8Text !== null) {
+    return { text: normalizeNovelText(utf8Text), encoding: 'UTF-8' }
+  }
+
+  const gb18030Text = decodeWith(buffer, 'gb18030')
+  if (gb18030Text !== null) {
+    return { text: normalizeNovelText(gb18030Text), encoding: 'GB18030' }
+  }
+
+  throw new Error('无法识别 TXT 文件编码，请将文件转换为 UTF-8 或 GB18030 后重新导入。')
+}
+
+/** 风格指纹是高成本任务；明显乱码必须在调用模型之前快速失败。 */
+export function assertReferenceTextUsable(text: string): void {
+  const sample = text.slice(0, 80_000)
+  const replacementCount = (sample.match(/�/g) ?? []).length
+  const replacementRatio = sample.length ? replacementCount / sample.length : 0
+  const mojibakeCount = (sample.match(/(?:锟斤拷|烫烫烫|屯屯屯|Ã.|Â.|â€)/g) ?? []).length
+
+  if ((replacementCount >= 8 && replacementRatio >= 0.01) || mojibakeCount >= 8) {
+    throw new Error('参考小说原文编码损坏，无法可靠提取风格指纹。请删除该参考资产，并用原始 UTF-8 或 GB18030 文件重新导入。')
+  }
+}
+
 async function readNovelText(filePath: string, fileType: ReferenceFileType): Promise<string> {
   if (fileType === 'docx') {
     const mammoth = await import('mammoth')
@@ -253,7 +311,7 @@ async function readNovelText(filePath: string, fileType: ReferenceFileType): Pro
   }
 
   const buffer = await readFile(filePath)
-  return normalizeNovelText(buffer.toString('utf-8'))
+  return decodeReferenceNovelBuffer(buffer).text
 }
 
 function splitParagraphs(text: string): string[] {
@@ -507,6 +565,7 @@ export async function extractReferenceNovelContext(filePath: string): Promise<Re
   const fileName = basename(filePath)
   const title = basename(filePath, extname(filePath)).trim() || '未命名参考作品'
   const text = await readNovelText(filePath, fileType)
+  assertReferenceTextUsable(text)
 
   if (!text.trim()) {
     throw new Error('导入的文件没有可用正文，请确认文件内容不是空白。')
@@ -523,6 +582,7 @@ export async function extractReferenceNovelContext(filePath: string): Promise<Re
     title,
     fileName,
     fileType,
+    sourceText: text,
     excerpt,
     analysisSample: buildAnalysisSample(chapters, text),
     characterCount: text.replace(/\s+/g, '').length,

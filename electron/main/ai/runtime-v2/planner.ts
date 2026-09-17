@@ -18,6 +18,8 @@ export interface AssistantRuntimePlan {
   continuationLabel: string
   continuationPrompt: string
   guidance: string
+  /** 本轮最终采用的 Skill 创作阶段，持久化后供模糊追问继承。 */
+  skillStageId?: 'reference' | 'premise' | 'setting' | 'outline' | 'draft'
 }
 
 const BASE_CONTEXT: ContextProviderId[] = ['project-brief', 'project-digest', 'recent-messages', 'skill-index']
@@ -71,6 +73,8 @@ export function createRuntimePlan(params: {
   const isChapterSurface = params.surface.scope === 'chapter' || params.surface.scope === 'selection'
   const isProjectSurface = params.surface.scope === 'project'
   const isEdit = intent === 'edit'
+  const isOutlineEntityEdit = isProjectSurface && intent === 'entity-edit' &&
+    /(大纲|剧情节点|卷纲|分卷)/.test(params.request.userMessage.replace(/\s+/g, ''))
 
   // 全局场景下检测"指向章节但方向模糊"的编辑意图，追加提示阻止直接改正文。
   // 章节 surface 本就以改写为主，不注入此提示。
@@ -84,7 +88,9 @@ export function createRuntimePlan(params: {
     contextProviders: resolveContextProviders(intent, params.surface, params.request.userMessage),
     maxReadToolCalls: isProjectSurface ? (requiresBatching ? 8 : 6) : (requiresBatching ? 5 : 4),
     maxSearchToolCalls: isProjectSurface ? 3 : 2,
-    maxStageChanges: intent === 'ingest' || intent === 'correct' || isEdit ? 5 : 2,
+    // 全局大纲常按一组剧情节点调整。两项上限会迫使助手反复续批，并诱发重复提案；
+    // 只放宽大纲编辑，其他实体仍维持较小批次，避免一次生成过多待审内容。
+    maxStageChanges: isOutlineEntityEdit ? 8 : intent === 'ingest' || intent === 'correct' || isEdit ? 5 : 2,
     defaultReadLimit: requiresBatching ? 5 : 3,
     allowFullChapterRead: isEdit || params.surface.scope === 'selection' || params.surface.scope === 'project',
     allowFullProjectModuleRead: false,
@@ -104,7 +110,7 @@ function resolveIntent(request: TurnSendRequest, surface: SurfaceDefinition): As
   if (hasEntityEditIntent(text) || hasFrameworkAdviceRequest(text)) return 'entity-edit'
   if (/(修正|纠正|统一|跑偏|冲突|不一致)/.test(text)) return 'correct'
   if (/(录入|沉淀|整理成设定|保存|记忆)/.test(text)) return 'ingest'
-  if (/(改写|润色|续写|扩写|重写|修改正文|章节)/.test(text)) return 'edit'
+  if (/(改写|润色|续写|扩写|重写|修改正文|章节|下一章|继续创作|创作(?:本|下|新)?章)/.test(text)) return 'edit'
   const hint = request.intentHint ?? ''
   if (hint.endsWith(':audit')) return 'audit'
   if (hint.endsWith(':correct')) return 'correct'
@@ -135,7 +141,7 @@ function resolveContextProviders(
   userMessage: string
 ): ContextProviderId[] {
   if (surface.scope === 'chapter' || surface.scope === 'selection') {
-    return [...BASE_CONTEXT, 'current-chapter', 'constraints']
+    return [...BASE_CONTEXT, 'current-chapter', 'constraints', 'style-fingerprint']
   }
   if (intent === 'audit') {
     return [...BASE_CONTEXT, 'constraints', 'plot-threads', 'workflow-documents']
@@ -148,6 +154,9 @@ function resolveContextProviders(
   }
   if (intent === 'ingest') {
     return [...BASE_CONTEXT, 'constraints']
+  }
+  if (intent === 'edit') {
+    return [...BASE_CONTEXT, 'constraints', 'style-fingerprint', ...resolveTargetedEntityProviders(userMessage)]
   }
   return BASE_CONTEXT
 }
