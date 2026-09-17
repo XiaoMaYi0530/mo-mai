@@ -372,11 +372,6 @@ mo-mai/
 
 - [LINUX DO](https://linux.do) — 新的理想型社区
 
-## 💬 交流群
-
-<a href="https://qm.qq.com/q/lTQfy3AYvY"><img src="docs/assets/qq.jpg" alt="QQ群二维码" width="200" /></a>
-
-点击链接加入群聊：https://qm.qq.com/q/lTQfy3AYvY
 
 ## 📄 License
 
