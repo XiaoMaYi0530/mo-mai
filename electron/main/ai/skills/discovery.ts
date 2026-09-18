@@ -6,6 +6,7 @@ import type { SkillDefinition } from './types'
 import { parseSkillFrontmatter } from './frontmatter'
 import { validateManifest } from './manifest'
 import { inferSkillMeta, buildFullManifest } from './heuristics'
+import { mergeScannedSkillSources } from './promoted-builtins'
 
 /** 将 projectId 标准化为 registry key，空值时返回 '_shared' */
 function resolveProjectSkillsScope(projectId?: string): string {
@@ -35,12 +36,7 @@ export function getProjectSkillsDirPath(projectId?: string): string {
 export async function scanSkillsFromDisk(projectId?: string): Promise<SkillDefinition[]> {
   const builtinSkills = await scanSkillsUnderRoot(getBuiltinSkillsDirPath(), 'builtin')
   const projectSkills = await scanSkillsUnderRoot(getProjectSkillsDirPath(projectId), 'project')
-  const mergedMap = new Map<string, SkillDefinition>()
-
-  for (const skill of builtinSkills) mergedMap.set(skill.id, skill)
-  for (const skill of projectSkills) mergedMap.set(skill.id, skill)
-
-  return Array.from(mergedMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  return mergeScannedSkillSources(builtinSkills, projectSkills)
 }
 
 /** 扫描指定根目录下所有子目录，将每个目录解析为 SkillDefinition（支持一层分组目录） */

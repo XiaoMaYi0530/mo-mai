@@ -9,6 +9,7 @@
  */
 
 import type { SurfaceDefinition } from '@shared/assistant-runtime'
+import { PROSE_CLARITY_RULES } from '../prompts/prose-clarity.ts'
 
 const CORE_SYSTEM = `你是一位小说创作项目的资深创作助手。你的工作是协助用户推进小说创作，理解用户意图后完成任务。
 
@@ -79,6 +80,8 @@ function buildSurfaceHint(surface: SurfaceDefinition): string {
 export interface BuildAssistantSystemPromptParams {
   surface: SurfaceDefinition
   intentHint?: string
+  /** 只有本轮实际要创作或改写正文时才注入，普通问答不增加上下文。 */
+  writingEdit?: boolean
   /** 由 ContextBuilder + assembleContextBlock 产出的项目上下文段。 */
   contextBlock: string
 }
@@ -104,6 +107,9 @@ export function buildAssistantSystemPrompt(
 ): string {
   const surfaceHint = buildSurfaceHint(params.surface)
   const intentHint = buildIntentHintBlock(params.intentHint)
-  const sections = [CORE_SYSTEM, surfaceHint, intentHint, '', '---', '', params.contextBlock]
+  const writingRules = params.writingEdit
+    ? `${PROSE_CLARITY_RULES}\n\n【改写落稿检查】结合已提供的相邻正文理解选区；保留剧情事实，不保留含混措辞。暂存前默读改写稿，确认人物指向、地点退路、动作对象和关键因果能从正文看懂，且没有把“可能／不像”改成确定结论。无法从现有正文确认的事实不要补造。`
+    : ''
+  const sections = [CORE_SYSTEM, surfaceHint, intentHint, writingRules, '', '---', '', params.contextBlock]
   return sections.filter(Boolean).join('\n\n')
 }

@@ -52,11 +52,20 @@ const isBackfillPausing = computed(() => backfillProgress.value?.status === 'pau
 const isBackfillControlsLocked = computed(() => isStartingBackfill.value || isBackfillingState.value)
 const backfillStatuses = ref<CharacterArcBackfillChapterStatus[]>([])
 const isLoadingBackfillStatuses = ref(false)
-const backfillMode = ref<'pending' | 'failed' | 'range' | 'all'>('pending')
+const backfillMode = ref<'unscanned' | 'failed' | 'range' | 'all'>('unscanned')
 const rangeStart = ref(1)
 const rangeEnd = ref(1)
 const storyState = ref<StoryState | null>(null)
 const isLoadingStoryState = ref(false)
+const editingCharacterState = ref<StoryState['characterStates'][number] | null>(null)
+const expandedCharacterStates = ref<Set<string>>(new Set())
+const characterStatePreviewCount = 4
+function toggleCharacterState(characterId: string): void {
+  const next = new Set(expandedCharacterStates.value)
+  if (next.has(characterId)) next.delete(characterId)
+  else next.add(characterId)
+  expandedCharacterStates.value = next
+}
 const updatingStoryStateKey = ref('')
 const projectRenderKey = computed(() => appStore.currentProject?.id ?? '')
 
@@ -85,6 +94,7 @@ const storyStateSummary = computed(() => {
   if (!s) return null
   return {
     characters: s.characterStates.length,
+    excludedCharacters: s.excludedCharacterIds.length,
     foreshadowing: s.allForeshadowing.length,
     relationships: s.allRelationships.length,
     timeline: s.recentTimeline.length,
@@ -181,13 +191,58 @@ async function applyStoryStateAction(action: Record<string, unknown>, actionKey:
   try {
     const response = await window.characterArc.updateStoryStateLifecycle(toIpcPayload({ projectId, action }))
     if (!response.success || !response.result) throw new Error(response.error ?? '更新世界状态失败')
-    if (appStore.currentProject?.id === projectId) storyState.value = response.result
+    if (appStore.currentProject?.id === projectId) {
+      storyState.value = response.result
+      if (editingCharacterState.value) {
+        editingCharacterState.value = response.result.characterStates.find(
+          (item) => item.characterId === editingCharacterState.value?.characterId
+        ) ?? null
+      }
+    }
     message.success(successText)
   } catch (error) {
     message.error(error instanceof Error ? error.message : '更新世界状态失败')
   } finally {
     updatingStoryStateKey.value = ''
   }
+}
+
+function removeCharacterStateEntry(field: 'goals' | 'inventory' | 'knowledge', value: string): void {
+  const character = editingCharacterState.value
+  if (!character) return
+  dialog.warning({
+    title: '移出当前角色状态',
+    content: `将「${value}」移出「${resolveCharacterName(character.characterId)}」的当前${field === 'goals' ? '目标' : field === 'inventory' ? '物品' : '已知'}。历史章节记录仍保留，确认继续？`,
+    positiveText: '移出当前状态',
+    negativeText: '取消',
+    onPositiveClick: () => applyStoryStateAction(
+      { kind: 'character-state-remove-entry', entityId: character.characterId, field, value },
+      `character-entry:${character.characterId}:${field}:${value}`,
+      '已移出当前角色状态'
+    )
+  })
+}
+
+function deleteCharacterState(character: StoryState['characterStates'][number]): void {
+  dialog.warning({
+    title: '永久删除角色状态',
+    content: `将永久删除「${resolveCharacterName(character.characterId)}」在当前项目的全部角色状态记录，并阻止后续定稿或补录自动重新创建。此操作不能恢复旧记录；正式人物卡、关系和伏笔不会删除。确认继续？`,
+    positiveText: '永久删除状态',
+    negativeText: '取消',
+    onPositiveClick: () => applyStoryStateAction(
+      { kind: 'character-state-delete', entityId: character.characterId },
+      `character-delete:${character.characterId}`,
+      '角色状态已永久删除，后续扫描将跳过此角色'
+    )
+  })
+}
+
+function allowCharacterStateAgain(characterId: string): void {
+  void applyStoryStateAction(
+    { kind: 'character-state-allow', entityId: characterId },
+    `character-allow:${characterId}`,
+    '已允许后续章节重新记录该角色；此前删除的状态不会恢复'
+  )
 }
 
 function setForeshadowingStatus(item: CharacterArcForeshadowing, status: CharacterArcForeshadowing['status']): void {
@@ -369,6 +424,8 @@ watch(
   () => appStore.currentProject?.id,
   () => {
     backfillProgress.value = null
+    expandedCharacterStates.value = new Set()
+    editingCharacterState.value = null
     void loadStoryState()
     void loadBackfillStatuses()
     void loadBackfillTaskStatus()
@@ -406,8 +463,8 @@ const validChapterCount = computed(
 )
 
 const backfillModeOptions = [
-  { label: '未完成章节', value: 'pending' },
-  { label: '仅失败章节', value: 'failed' },
+  { label: '未扫描／正文已变化', value: 'unscanned' },
+  { label: '失败／上次中断', value: 'failed' },
   { label: '指定范围重新扫描', value: 'range' },
   { label: '全书强制重扫（高消耗）', value: 'all' }
 ]
@@ -500,7 +557,7 @@ const selectedBackfillChapterIds = computed(() => {
       .map((status) => status.chapterId)
   }
   return statuses
-    .filter((status) => status.status !== 'success' && status.status !== 'skipped')
+    .filter((status) => status.status === 'unscanned' || status.status === 'stale')
     .map((status) => status.chapterId)
 })
 
@@ -610,7 +667,9 @@ function runStateBackfill(): void {
   dialog.warning({
     title: '从已有章节补录状态库',
     content: backfillMode.value === 'all'
-      ? `将强制重新扫描全书 ${selectedCount} 个章节，预计至少调用 AI ${selectedCount} 次；异常结果还可能自动重试。这通常只用于状态库严重错乱后的重建，消耗较高。确认继续？`
+      ? `将强制重新扫描全书 ${selectedCount} 个章节，预计至少调用 AI ${selectedCount} 次；异常结果还可能自动重试。此操作不会删除历史状态记录，消耗较高。确认继续？`
+      : backfillMode.value === 'range'
+        ? `将重新扫描指定范围内的 ${selectedCount} 个章节，包括已扫描成功的章节，预计调用 AI ${selectedCount} 次。确认继续？`
       : `将对 ${selectedCount} 个章节逐章提取状态变更，预计调用 AI ${selectedCount} 次。已完成且正文未变化的章节不会重复扫描。确认继续？`,
     positiveText: '开始补录',
     negativeText: '取消',
@@ -629,8 +688,8 @@ async function runStateBackfillTask(projectId: string): Promise<void> {
       : backfillMode.value === 'failed'
       ? { mode: 'failed' as const }
       : backfillMode.value === 'range'
-        ? { mode: 'custom' as const, chapterIds: selectedBackfillChapterIds.value }
-        : { mode: 'pending' as const }
+        ? { mode: 'range' as const, chapterIds: selectedBackfillChapterIds.value }
+        : { mode: 'unscanned' as const }
     const response = await window.characterArc.backfillProjectState(toIpcPayload({
       settings: appStore.appSettings,
       projectId,
@@ -849,7 +908,7 @@ watch(
           </template>
         </div>
         <n-alert v-if="backfillMode === 'all'" type="warning" :show-icon="false" class="pk-card-progress">
-          全书重扫会覆盖每章的补录结果并产生大量 AI 调用。日常使用请选择“未完成章节”。
+          全书重扫会覆盖每章的补录结果并产生大量 AI 调用。日常使用请选择“未扫描／正文已变化”。
         </n-alert>
         <n-alert v-else-if="backfillMode === 'range'" type="info" :show-icon="false" class="pk-card-progress">
           指定范围会重新扫描其中已完成的章节，可用于给旧章节补充人物与势力候选；不必重扫全书。
@@ -1032,11 +1091,33 @@ watch(
                   <span v-if="cs.powerLevel">能力：{{ cs.powerLevel }}</span>
                 </div>
                 <div v-if="cs.goals.length || cs.inventory.length || cs.knowledge.length" class="pk-state-tags">
-                  <n-tag v-for="g in cs.goals" :key="`g-${g}`" size="tiny" :bordered="false" type="warning">目标：{{ g }}</n-tag>
-                  <n-tag v-for="it in cs.inventory" :key="`i-${it}`" size="tiny" :bordered="false">物品：{{ it }}</n-tag>
-                  <n-tag v-for="k in cs.knowledge" :key="`k-${k}`" size="tiny" :bordered="false" type="success">已知：{{ k }}</n-tag>
+                  <n-tag v-for="g in expandedCharacterStates.has(cs.characterId) ? cs.goals : cs.goals.slice(-characterStatePreviewCount)" :key="`g-${g}`" size="tiny" :bordered="false" type="warning">目标：{{ g }}</n-tag>
+                  <n-tag v-for="it in expandedCharacterStates.has(cs.characterId) ? cs.inventory : cs.inventory.slice(-characterStatePreviewCount)" :key="`i-${it}`" size="tiny" :bordered="false">物品：{{ it }}</n-tag>
+                  <n-tag v-for="k in expandedCharacterStates.has(cs.characterId) ? cs.knowledge : cs.knowledge.slice(-characterStatePreviewCount)" :key="`k-${k}`" size="tiny" :bordered="false" type="success">已知：{{ k }}</n-tag>
+                  <n-button
+                    v-if="cs.goals.length > characterStatePreviewCount || cs.inventory.length > characterStatePreviewCount || cs.knowledge.length > characterStatePreviewCount"
+                    text size="tiny"
+                    @click="toggleCharacterState(cs.characterId)"
+                  >
+                    {{ expandedCharacterStates.has(cs.characterId) ? '收起' : `查看全部（${cs.goals.length + cs.inventory.length + cs.knowledge.length} 项）` }}
+                  </n-button>
+                </div>
+                <div class="pk-state-actions">
+                  <n-button v-if="cs.goals.length || cs.inventory.length || cs.knowledge.length" size="tiny" secondary :disabled="Boolean(updatingStoryStateKey)" @click="editingCharacterState = cs">整理条目</n-button>
+                  <n-button size="tiny" quaternary type="error" :disabled="Boolean(updatingStoryStateKey)" @click="deleteCharacterState(cs)">永久删除状态</n-button>
                 </div>
               </div>
+            </div>
+          </n-collapse-item>
+
+          <n-collapse-item v-if="storyState?.excludedCharacterIds.length" name="excluded-characters">
+            <template #header>
+              <div class="pk-state-head"><Users :size="14" /><span>已删除的角色状态</span><n-tag size="tiny" :bordered="false">{{ storyState.excludedCharacterIds.length }}</n-tag></div>
+            </template>
+            <p class="pk-card-desc">旧记录已永久删除；这些名称不会被后续扫描自动重建。重新允许只影响未来，不会恢复旧记录。</p>
+            <div v-for="characterId in storyState.excludedCharacterIds" :key="`excluded-${characterId}`" class="pk-state-actions">
+              <n-tag size="tiny" :bordered="false">{{ resolveCharacterName(characterId) }}</n-tag>
+              <n-button size="tiny" text :disabled="Boolean(updatingStoryStateKey)" @click="allowCharacterStateAgain(characterId)">允许重新记录</n-button>
             </div>
           </n-collapse-item>
 
@@ -1146,6 +1227,9 @@ watch(
                 <div v-if="tl.events.length" class="pk-state-tags">
                   <n-tag v-for="(ev, i) in tl.events" :key="`ev-${i}`" size="tiny" :bordered="false">{{ ev }}</n-tag>
                 </div>
+                <div v-if="tl.readerKnowledge.length" class="pk-state-tags">
+                  <n-tag v-for="(fact, i) in tl.readerKnowledge" :key="`reader-${i}`" size="tiny" :bordered="false" type="success">读者已知：{{ fact }}</n-tag>
+                </div>
                 <div v-if="tl.worldStateChanges.length" class="pk-state-tags">
                   <n-tag v-for="(wc, i) in tl.worldStateChanges" :key="`wc-${i}`" size="tiny" :bordered="false" type="warning">{{ wc }}</n-tag>
                 </div>
@@ -1192,6 +1276,33 @@ watch(
         </n-collapse>
       </n-spin>
     </section>
+
+    <n-modal
+      :show="Boolean(editingCharacterState)"
+      preset="card"
+      class="pk-candidate-modal"
+      :title="`整理角色状态 · ${resolveCharacterName(editingCharacterState?.characterId ?? '')}`"
+      :bordered="false"
+      @update:show="(show) => { if (!show) editingCharacterState = null }"
+    >
+      <template v-if="editingCharacterState">
+        <n-alert type="info" :bordered="false" :show-icon="false">
+          移出当前状态不会删除历史章节；以后正文确实再次提及时，状态提取仍可能重新加入。
+        </n-alert>
+        <div v-for="group in [
+          { field: 'goals' as const, label: '目标', items: editingCharacterState.goals },
+          { field: 'inventory' as const, label: '物品', items: editingCharacterState.inventory },
+          { field: 'knowledge' as const, label: '已知', items: editingCharacterState.knowledge }
+        ]" :key="group.field" class="pk-character-edit-group">
+          <strong>{{ group.label }}（{{ group.items.length }}）</strong>
+          <div v-if="!group.items.length" class="pk-card-desc">暂无</div>
+          <div v-for="item in group.items" :key="item" class="pk-tension-row">
+            <n-tag size="small" :bordered="false">{{ item }}</n-tag>
+            <n-button size="tiny" text type="error" :disabled="Boolean(updatingStoryStateKey)" @click="removeCharacterStateEntry(group.field, item)">移出当前状态</n-button>
+          </div>
+        </div>
+      </template>
+    </n-modal>
 
     <n-modal
       :show="Boolean(editingEntityCandidate)"
@@ -1666,6 +1777,18 @@ watch(
   flex-wrap: wrap;
   gap: 6px;
   padding-top: 2px;
+}
+
+.pk-character-edit-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.pk-character-edit-group .pk-tension-row {
+  max-width: 100%;
 }
 
 .pk-tension-row {

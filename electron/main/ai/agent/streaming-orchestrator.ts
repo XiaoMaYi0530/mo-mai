@@ -17,7 +17,7 @@ import { getRecentSkillUsage, formatSkillUsageHint, recordSkillUsage } from './s
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { formatAiErrorMessage } from '../error-message'
-import { buildSkillContentExcerpt } from '../skills/content-slice'
+import { buildSkillContentExcerpt, DIRECT_SKILL_MAX_CHARS } from '../skills/content-slice'
 
 function resolveStreamingAgentMaxSteps(taskName: AiTaskPayload['task']): number | undefined {
   if (taskName === 'chapter-first-draft') {
@@ -96,7 +96,7 @@ export async function runStreamingAgentTask(
 
   const requiredSkillBlock = requiredSkillDefs.length
     ? `\n\n## ${skillPolicy.mode === 'only' ? '本轮仅使用的 SKILLS（不得混用其他 Skill）' : '强制生效的 SKILLS'}\n\n${requiredSkillDefs.map((s) => {
-        const body = buildSkillContentExcerpt(s, task, 2400)
+        const body = buildSkillContentExcerpt(s, task, DIRECT_SKILL_MAX_CHARS)
         return `### ${s.name}\n${body}`
       }).join('\n\n')}`
     : ''
@@ -106,7 +106,7 @@ export async function runStreamingAgentTask(
   if (task.task === 'chapter-first-draft' && optionalSkillDefs.length > 0) {
     const refParts: string[] = []
     for (const s of optionalSkillDefs) {
-      const body = buildSkillContentExcerpt(s, task, 1800)
+      const body = buildSkillContentExcerpt(s, task, DIRECT_SKILL_MAX_CHARS)
       if (body) {
         refParts.push(`### ${s.name}\n${body}`)
       }

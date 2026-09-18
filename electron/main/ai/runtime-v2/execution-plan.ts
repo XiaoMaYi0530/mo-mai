@@ -39,7 +39,7 @@ import { saveRuntimeKnowledgeDocument } from './knowledge-writer'
 import { createEvidenceLedger, wrapToolsWithRuntimeBudget } from './evidence-ledger'
 import { createRuntimePlan, type AssistantRuntimePlan } from './planner'
 import { selectToolsForTurn } from './tool-selection-policy'
-import { buildSkillContentExcerpt } from '../skills/content-slice'
+import { buildSkillContentExcerpt, DIRECT_SKILL_MAX_CHARS } from '../skills/content-slice'
 import { resolveSkillStage } from './skill-stage'
 
 /** 输出预算包含 reasoning token，保留足够空间给回答/工具规划，不随 prompt 无限放大。 */
@@ -162,6 +162,7 @@ export function createExecutionPlanner(
     const systemPrompt = buildAssistantSystemPrompt({
       surface: routedSurface,
       intentHint: request.intentHint,
+      writingEdit: runtimePlan.intent === 'edit',
       contextBlock: [
         `## Runtime v2 分批计划\n\n${runtimePlan.guidance}`,
         skillPromptBlock,
@@ -398,7 +399,7 @@ function buildV2SkillPromptBlock(
         : '## 强制生效的 SKILLS（已直接注入，无需调用 skill_load）',
       '',
       ...requiredSkills.map((skill) => {
-        const body = buildSkillContentExcerpt(skill, task, 2400)
+        const body = buildSkillContentExcerpt(skill, task, DIRECT_SKILL_MAX_CHARS)
         return `### ${skill.name}\n${body}`
       })
     ].join('\n'))

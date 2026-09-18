@@ -170,6 +170,8 @@ export function createProjectWorkspaceSeedFromReferenceBlueprint(
   let chapterIndex = 0
   const chapters = outlineItems.flatMap((item, outlineIndex) => {
     const source = blueprint.outlineItems[outlineIndex]
+    // 远期分卷只保存路线与剧情节点；章节在推进到该卷时再滚动规划。
+    if (source?.volumeIndex !== 0) return []
     const plans = source?.chapterPlan?.length ? source.chapterPlan : [{
       title: source?.title,
       conflict: source?.conflict,

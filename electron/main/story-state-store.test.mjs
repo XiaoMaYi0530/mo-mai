@@ -4,7 +4,10 @@ import test from 'node:test'
 
 import {
   applyStateDelta,
+  buildStoryStateContext,
   buildStoryStateOverview,
+  formatStoryStateForPrompt,
+  getForeshadowingHealth,
   initStoryStateSchema,
   normalizeStateDelta,
   refreshAutomaticRelationshipLifecycle,
@@ -33,6 +36,60 @@ test('畸形状态增量会被规范化为可遍历、可绑定的字段', () =>
   assert.equal(delta.characters_updated[0].changes.mental_state, undefined)
   assert.deepEqual(delta.characters_updated[0].changes.new_knowledge, ['密道'])
   assert.deepEqual(delta.timeline.events, [])
+})
+
+test('角色已知与读者已知分别进入续写上下文', () => {
+  const db = new DatabaseSync(':memory:')
+  initStoryStateSchema(db)
+  applyStateDelta(db, 'project-1', 3, normalizeStateDelta({
+    characters_updated: [{ character_id: '林岚', changes: { new_knowledge: ['密道入口在钟楼'] } }],
+    timeline: {
+      events: ['顾川藏起旧信'],
+      reader_knowledge: ['旧信来自顾川']
+    }
+  }))
+
+  const context = buildStoryStateOverview(db, 'project-1')
+  assert.deepEqual(context.recentTimeline[0].readerKnowledge, ['旧信来自顾川'])
+  const prompt = formatStoryStateForPrompt(context)
+  assert.match(prompt, /林岚:.*已知\[密道入口在钟楼\]/)
+  assert.match(prompt, /读者已知：旧信来自顾川/)
+  assert.doesNotMatch(prompt, /林岚:.*旧信来自顾川/)
+})
+
+test('写作上下文用人物卡 ID 检索时能命中以姓名保存的角色状态和关系', () => {
+  const db = new DatabaseSync(':memory:')
+  initStoryStateSchema(db)
+  db.exec('CREATE TABLE characters (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL) STRICT')
+  db.prepare('INSERT INTO characters VALUES (?, ?, ?)').run('card-lin', 'project-1', '林岚')
+  db.prepare('INSERT INTO characters VALUES (?, ?, ?)').run('card-gu', 'project-1', '顾川')
+  applyStateDelta(db, 'project-1', 1, normalizeStateDelta({
+    characters_updated: [{ character_id: '林岚', changes: { new_knowledge: ['钟楼入口'] } }],
+    relationships_delta: [{
+      relationship_id: '林岚-顾川', participants: ['林岚', '顾川'],
+      status_change: { from: '', to: '合作', pivot_event: '共同脱险' }
+    }]
+  }))
+
+  const context = buildStoryStateContext(db, 'project-1', ['card-lin'])
+  assert.deepEqual(context.characterStates.map((state) => state.characterId), ['林岚'])
+  assert.deepEqual(context.relationships.map((relation) => relation.relationshipId), ['林岚-顾川'])
+})
+
+test('旧版时间线表升级后保留事件并补充读者已知列', () => {
+  const db = new DatabaseSync(':memory:')
+  db.exec(`CREATE TABLE story_timeline (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL, chapter_index INTEGER NOT NULL,
+    story_date TEXT NOT NULL DEFAULT '', events_json TEXT NOT NULL DEFAULT '[]',
+    world_state_changes_json TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL
+  ) STRICT`)
+  db.prepare('INSERT INTO story_timeline VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    'old', 'project-1', 1, '第一日', '["出发"]', '[]', '2026-09-17T00:00:00.000Z'
+  )
+  initStoryStateSchema(db)
+  const timeline = buildStoryStateOverview(db, 'project-1').recentTimeline[0]
+  assert.deepEqual(timeline.events, ['出发'])
+  assert.deepEqual(timeline.readerKnowledge, [])
 })
 
 test('同一章节状态增量重复写入不会重复累积数组字段', () => {
@@ -73,6 +130,36 @@ test('同一章节状态增量重复写入不会重复累积数组字段', () =>
   assert.deepEqual(JSON.parse(character.goals_json), ['找到证人'])
   assert.deepEqual(JSON.parse(relationship.tension_points_json), ['互不信任'])
   assert.deepEqual(JSON.parse(foreshadowing.clues_json), [{ chapter: 3, clue: '火漆印', method: '特写' }])
+})
+
+test('角色当前状态快照替换已完成目标、无关物品与过时已知，空数组可清除', () => {
+  const db = new DatabaseSync(':memory:')
+  initStoryStateSchema(db)
+  applyStateDelta(db, 'project-1', 1, normalizeStateDelta({
+    characters_updated: [{ character_id: '林岚', changes: {
+      goals_update: { added: ['已经找到证人', '阻止交易'] },
+      inventory_delta: { added: ['用过的纸杯', '关键账本'] },
+      new_knowledge: ['已过时的地点', '交易时间']
+    } }]
+  }))
+  applyStateDelta(db, 'project-1', 2, normalizeStateDelta({
+    characters_updated: [{ character_id: '林岚', changes: {
+      active_state: { goals: ['阻止交易'], inventory: ['关键账本'], knowledge: ['交易时间'] }
+    } }]
+  }))
+  let character = db.prepare('SELECT knowledge_json, inventory_json, goals_json FROM story_character_state ORDER BY chapter_index DESC LIMIT 1').get()
+  assert.deepEqual(JSON.parse(character.goals_json), ['阻止交易'])
+  assert.deepEqual(JSON.parse(character.inventory_json), ['关键账本'])
+  assert.deepEqual(JSON.parse(character.knowledge_json), ['交易时间'])
+  applyStateDelta(db, 'project-1', 3, normalizeStateDelta({
+    characters_updated: [{ character_id: '林岚', changes: {
+      active_state: { goals: [], inventory: [], knowledge: [] }
+    } }]
+  }))
+  character = db.prepare('SELECT knowledge_json, inventory_json, goals_json FROM story_character_state ORDER BY chapter_index DESC LIMIT 1').get()
+  assert.deepEqual(JSON.parse(character.goals_json), [])
+  assert.deepEqual(JSON.parse(character.inventory_json), [])
+  assert.deepEqual(JSON.parse(character.knowledge_json), [])
 })
 
 test('长期无互动关系自动休眠归档，新互动会自动唤醒并保留历史', () => {
@@ -132,6 +219,87 @@ test('伏笔回收和废弃会进入归档视图且不再注入写作上下文',
   assert.equal(overview.activeForeshadowing.length, 0)
   assert.equal(overview.allForeshadowing[0].status, 'resolved')
   assert.equal(overview.allForeshadowing[0].statusManagedBy, 'manual')
+})
+
+test('未指定预期回收章不会变成第 0 章或被误报逾期', () => {
+  const db = new DatabaseSync(':memory:')
+  initStoryStateSchema(db)
+  const delta = normalizeStateDelta({
+    foreshadowing_delta: { planted: [{ id: '旧信', type: '暗线', description: '待揭示的旧信', method: '特写' }] }
+  })
+  assert.equal(delta.foreshadowing_delta.planted[0].payoff_chapter, undefined)
+  applyStateDelta(db, 'project-1', 3, delta)
+  assert.equal(buildStoryStateOverview(db, 'project-1').allForeshadowing[0].payoffChapter, null)
+  assert.deepEqual(getForeshadowingHealth(db, 'project-1', 40).overdue, [])
+  db.prepare('UPDATE story_foreshadowing SET payoff_chapter = 0 WHERE project_id = ?').run('project-1')
+  initStoryStateSchema(db)
+  assert.equal(buildStoryStateOverview(db, 'project-1').allForeshadowing[0].payoffChapter, null)
+})
+
+test('写作上下文优先选近期伏笔且限制数量，不能让旧伏笔挤掉新线索', () => {
+  const db = new DatabaseSync(':memory:')
+  initStoryStateSchema(db)
+  for (let chapter = 1; chapter <= 31; chapter++) {
+    applyStateDelta(db, 'project-1', chapter, normalizeStateDelta({
+      foreshadowing_delta: { planted: [{
+        id: `线索${chapter}`, type: '暗线', description: `第${chapter}章线索`, method: '特写'
+      }] }
+    }))
+  }
+  const prompt = formatStoryStateForPrompt(buildStoryStateContext(db, 'project-1', []))
+  assert.match(prompt, /第31章线索/)
+  assert.doesNotMatch(prompt, /第1章线索/)
+  assert.ok((prompt.match(/^- 线索/gm) ?? []).length <= 15)
+})
+
+test('较早埋设但即将回收的伏笔仍优先进入写作上下文', () => {
+  const db = new DatabaseSync(':memory:')
+  initStoryStateSchema(db)
+  for (let chapter = 1; chapter <= 20; chapter++) {
+    applyStateDelta(db, 'project-1', chapter, normalizeStateDelta({
+      foreshadowing_delta: { planted: [{
+        id: `线索${chapter}`, type: '暗线', description: `第${chapter}章线索`, method: '特写',
+        ...(chapter === 1 ? { payoff_chapter: 21 } : {})
+      }] }
+    }))
+  }
+  const prompt = formatStoryStateForPrompt(buildStoryStateContext(db, 'project-1', []))
+  assert.match(prompt, /第1章线索/)
+  assert.doesNotMatch(prompt, /第2章线索/)
+})
+
+test('可人工移除角色当前条目；永久删除全部历史并阻止补录重新创建，其他项目不受影响', () => {
+  const db = new DatabaseSync(':memory:')
+  initStoryStateSchema(db)
+  const delta = normalizeStateDelta({ characters_updated: [{ character_id: '无名路人', changes: {
+    goals_update: { added: ['送信'] }, inventory_delta: { added: ['纸条'] }, new_knowledge: ['地址']
+  } }] })
+  applyStateDelta(db, 'project-1', 1, delta)
+  applyStateDelta(db, 'project-1', 2, delta)
+  applyStateDelta(db, 'project-2', 1, delta)
+  updateStoryStateLifecycle(db, 'project-1', {
+    kind: 'character-state-remove-entry', entityId: '无名路人', field: 'goals', value: '送信'
+  })
+  assert.deepEqual(buildStoryStateOverview(db, 'project-1').characterStates[0].goals, [])
+  updateStoryStateLifecycle(db, 'project-1', {
+    kind: 'character-state-remove-entry', entityId: '无名路人', field: 'inventory', value: '纸条'
+  })
+  updateStoryStateLifecycle(db, 'project-1', {
+    kind: 'character-state-remove-entry', entityId: '无名路人', field: 'knowledge', value: '地址'
+  })
+  const current = buildStoryStateOverview(db, 'project-1').characterStates[0]
+  assert.deepEqual([current.inventory, current.knowledge], [[], []])
+  updateStoryStateLifecycle(db, 'project-1', { kind: 'character-state-delete', entityId: '无名路人' })
+  assert.equal(db.prepare("SELECT count(*) AS n FROM story_character_state WHERE project_id='project-1'").get().n, 0)
+  applyStateDelta(db, 'project-1', 3, delta)
+  assert.deepEqual(buildStoryStateOverview(db, 'project-1').characterStates, [])
+  assert.doesNotMatch(formatStoryStateForPrompt(buildStoryStateContext(db, 'project-1', [])), /无名路人/)
+  assert.deepEqual(buildStoryStateOverview(db, 'project-1').excludedCharacterIds, ['无名路人'])
+  assert.equal(buildStoryStateOverview(db, 'project-2').characterStates.length, 1)
+  updateStoryStateLifecycle(db, 'project-1', { kind: 'character-state-allow', entityId: '无名路人' })
+  applyStateDelta(db, 'project-1', 4, delta)
+  assert.equal(buildStoryStateOverview(db, 'project-1').characterStates.length, 1)
+  assert.equal(db.prepare("SELECT count(*) AS n FROM story_character_state WHERE project_id='project-1'").get().n, 1)
 })
 
 test('解决关系张力会从当前状态移除并写入变化历史', () => {

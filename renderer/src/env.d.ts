@@ -23,6 +23,7 @@ declare global {
     | 'outline'
     | 'plotThreads'
     | 'chapters'
+    | 'storyState'
     | 'chapterVersions'
     | 'workflowDocuments'
     | 'knowledgeDocuments'
@@ -302,6 +303,7 @@ declare global {
       inventory: string[]
       goals: string[]
     }>
+    excludedCharacterIds: string[]
     activeForeshadowing: CharacterArcForeshadowing[]
     allForeshadowing: CharacterArcForeshadowing[]
     relationships: CharacterArcRelationship[]
@@ -311,6 +313,7 @@ declare global {
       chapterIndex: number
       storyDate: string
       events: string[]
+      readerKnowledge: string[]
       worldStateChanges: string[]
     }>
     worldRules: Array<{
@@ -422,7 +425,7 @@ declare global {
         settings: import('@/types/app').AppSettings
         projectId: string
         selection?: {
-          mode?: 'pending' | 'failed' | 'custom' | 'all'
+          mode?: 'pending' | 'unscanned' | 'failed' | 'custom' | 'range' | 'all'
           chapterIds?: string[]
         }
       }) => Promise<{

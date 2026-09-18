@@ -75,11 +75,12 @@ ${String(context.referenceStructure ?? '')}
 1. blueprintSummary：200-400 字，说明新故事核心卖点、主角目标、主要阻力与长线承诺。
 2. transformationNotes：4-8 条，逐条说明相对参考结构做了什么原创化改造。
 3. worldviewEntries：4-8 条，只创建直接支撑主线的原创规则。
-4. outlineVolumes：每卷只包含 title、summary；卷数由故事的真实阶段决定，不输出总字数、每卷字数或预计章节数。
-5. outlineItems：输出足以表达完整因果链的关键剧情节点，不按预计章节数凑数量。每项包含 volumeIndex（从 0 开始）、title、conflict、summary 和 chapterPlan。
-6. chapterPlan 是该剧情节点的章节展开建议，每个节点可自然拆为 1-N 章；按场景转换、视角切换、冲突阶段与章末钩子决定，不得机械固定章数。每章只包含 title、conflict、summary。
-7. 除用户锁定事实外，所有专名必须重新原创；不得在任何字段提及或复现参考作品专名。
-8. relatedCharacterIds、relatedOrganizationIds、relatedWorldviewIds 均返回空数组，项目创建后再由用户或助手绑定。
+4. outlineVolumes：每卷只包含 title、summary；卷数由故事的真实阶段决定，不输出总字数、每卷字数或预计章节数。summary 要写出本卷目标、主要阻力、关键转折、卷末不可逆结果及下一卷承接；远期卷只锁定这些里程碑，保留具体过程的调整空间。
+5. 采用滚动规划，不要把所有卷平均拆成一两个节点：第一卷优先给出 8-12 个有因果递进的剧情节点，详细规划开局到卷内中段的首次重大转折，但暂不在节点内提前兑现卷末高潮，留下继续扩写的空间；第二卷给出 3-6 个方向节点；更远的卷各保留 1-2 个关键里程碑。若全书只有一卷，也要充分展开该卷。节点数量服务于实际冲突，不靠重复遭遇或机械拆分凑数。
+6. outlineItems 的每项包含 volumeIndex（从 0 开始）、title、conflict、summary 和 chapterPlan。第一卷每个节点给出 2-4 个有不同推进作用的近期章节建议，至少形成 16 个可写章节；第二卷及以后 chapterPlan 返回空数组，避免过早锁死远期章节。当前章节建议只是首批规划，不宣称已经覆盖整卷目标字数；写作推进后继续扩展当前卷。
+7. chapterPlan 按场景转换、视角切换、冲突阶段与章末钩子决定，不得机械固定章数；每章只包含 title、conflict、summary。新增的第一卷细节必须与后续分卷里程碑兼容，不要为了填篇幅提前兑现后续卷的高潮。
+8. 除用户锁定事实外，所有专名必须重新原创；不得在任何字段提及或复现参考作品专名。
+9. relatedCharacterIds、relatedOrganizationIds、relatedWorldviewIds 均返回空数组，项目创建后再由用户或助手绑定。
 
 生成前复核：不得修改下列用户原创方向，不得抛弃已选路线另起故事：
 【原创方向】${projectPremise}
@@ -105,17 +106,17 @@ ${String(context.referenceStructure ?? '')}
           wordTarget: text(item?.wordTarget, '3000'),
           conflict: text(item?.conflict, '待补充冲突。'),
           summary: text(item?.summary, '待补充剧情摘要。'),
-          chapterPlan: Array.isArray(item?.chapterPlan) && item.chapterPlan.length
+          chapterPlan: item?.volumeIndex === 0 && Array.isArray(item?.chapterPlan) && item.chapterPlan.length
             ? item.chapterPlan.slice(0, 12).map((chapter, chapterIndex) => ({
                 title: text(chapter?.title, `${text(item?.title, '剧情节点')} · ${chapterIndex + 1}`),
                 conflict: text(chapter?.conflict, text(item?.conflict, '待补充冲突。')),
                 summary: text(chapter?.summary, text(item?.summary, '待补充剧情摘要。'))
               }))
-            : [{
+            : item?.volumeIndex === 0 ? [{
                 title: text(item?.title, '剧情节点'),
                 conflict: text(item?.conflict, '待补充冲突。'),
                 summary: text(item?.summary, '待补充剧情摘要。')
-              }],
+              }] : [],
           relatedCharacterIds: normalizeOutlineReferenceIds(item?.relatedCharacterIds),
           relatedOrganizationIds: normalizeOutlineReferenceIds(item?.relatedOrganizationIds),
           relatedWorldviewIds: normalizeOutlineReferenceIds(item?.relatedWorldviewIds)
@@ -144,8 +145,24 @@ ${String(context.referenceStructure ?? '')}
       && value.transformationNotes?.length >= 3
       && value.worldviewEntries?.length >= 3
       && value.outlineVolumes?.length >= 1
-      && value.outlineItems?.length >= 6
+      && value.outlineItems?.filter((item) => item.volumeIndex === 0).length >= 8
+      && value.outlineItems
+        .filter((item) => item.volumeIndex === 0)
+        .reduce((count, item) => count + item.chapterPlan.length, 0) >= 16
     )
+  },
+  describeValidationErrors(result: AiTaskResult): string[] {
+    const value = result as ReferenceProjectBlueprintResult
+    const firstVolumeItems = value.outlineItems?.filter((item) => item.volumeIndex === 0) ?? []
+    const firstVolumeChapters = firstVolumeItems.reduce((count, item) => count + item.chapterPlan.length, 0)
+    const errors: string[] = []
+    if (!value.blueprintSummary?.trim()) errors.push('缺少故事骨架摘要')
+    if ((value.transformationNotes?.length ?? 0) < 3) errors.push('原创化改造记录至少需要 3 条')
+    if ((value.worldviewEntries?.length ?? 0) < 3) errors.push('世界规则至少需要 3 条')
+    if (!value.outlineVolumes?.length) errors.push('至少需要 1 个分卷')
+    if (firstVolumeItems.length < 8) errors.push(`第一卷至少需要 8 个剧情节点，当前只有 ${firstVolumeItems.length} 个`)
+    if (firstVolumeChapters < 16) errors.push(`第一卷至少需要 16 个首批章节建议，当前只有 ${firstVolumeChapters} 个`)
+    return errors
   },
   resolveMaxTokens(): number {
     return 12000

@@ -17,7 +17,7 @@ export type BackfillChapterStatus = {
 }
 
 export type BackfillSelection = {
-  mode?: 'pending' | 'failed' | 'custom' | 'all'
+  mode?: 'pending' | 'unscanned' | 'failed' | 'custom' | 'range' | 'all'
   chapterIds?: string[]
 }
 
@@ -32,6 +32,10 @@ export function selectBackfillChapterStatuses(
     if (mode === 'failed') {
       return status.status === 'failed' || status.status === 'running'
     }
+    if (mode === 'unscanned') {
+      return status.status === 'unscanned' || status.status === 'stale'
+    }
+    if (mode === 'range') return selectedIds.has(status.chapterId)
     if (mode === 'custom' && !selectedIds.has(status.chapterId)) {
       return false
     }

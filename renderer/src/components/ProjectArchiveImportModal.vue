@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { NButton, NFormItem, NModal, NProgress, NRadioButton, NRadioGroup, NSelect, useMessage } from 'naive-ui'
+import { NButton, NCheckbox, NFormItem, NModal, NProgress, NRadioButton, NRadioGroup, NSelect, useMessage } from 'naive-ui'
 import { useAppStore } from '@/stores/app'
 
 const appStore = useAppStore()
@@ -12,6 +12,7 @@ const archiveImportFilePath = ref('')
 const archiveImportMode = ref<CharacterArcProjectArchiveImportMode>('new-project')
 const archiveTargetProjectId = ref('')
 const archiveSelectedModules = ref<CharacterArcProjectArchiveModule[]>([])
+const acknowledgeStoryStateClear = ref(false)
 const isInspectingArchive = ref(false)
 const isImportingArchive = ref(false)
 const archiveImportProgress = ref<CharacterArcProjectArchiveImportProgressPayload>({
@@ -29,6 +30,7 @@ const archiveModuleOptions: Array<{ label: string; value: CharacterArcProjectArc
   { label: '大纲', value: 'outline' },
   { label: '伏笔线', value: 'plotThreads' },
   { label: '章节正文', value: 'chapters' },
+  { label: '故事状态与补录', value: 'storyState' },
   { label: '章节版本', value: 'chapterVersions' },
   { label: '创作记忆', value: 'workflowDocuments' },
   { label: '知识文档', value: 'knowledgeDocuments' },
@@ -72,7 +74,10 @@ onBeforeUnmount(() => {
 })
 
 function resetArchiveModules(): void {
-  archiveSelectedModules.value = archiveModuleOptions.map((option) => option.value)
+  archiveSelectedModules.value = archiveModuleOptions
+    .filter((option) => option.value !== 'storyState' || 'storyState' in (archiveImportPreview.value?.modules ?? {}))
+    .map((option) => option.value)
+  acknowledgeStoryStateClear.value = false
 }
 
 async function pickArchive(): Promise<void> {
@@ -107,6 +112,23 @@ async function confirmArchiveImport(): Promise<void> {
   }
   if (archiveImportMode.value === 'overwrite-project' && !archiveTargetProjectId.value) {
     message.warning('请选择要覆盖的目标项目')
+    return
+  }
+  if (archiveSelectedModules.value.includes('storyState')) {
+    if (!('storyState' in (archiveImportPreview.value?.modules ?? {}))) {
+      message.warning('旧版归档不包含故事状态，请取消勾选')
+      return
+    }
+    if (!archiveSelectedModules.value.includes('chapters') || !archiveSelectedModules.value.includes('characters')) {
+      message.warning('导入故事状态需同时勾选章节正文和角色与势力')
+      return
+    }
+  }
+  if (archiveImportMode.value === 'overwrite-project'
+    && archiveSelectedModules.value.includes('chapters')
+    && !archiveSelectedModules.value.includes('storyState')
+    && !acknowledgeStoryStateClear.value) {
+    message.warning('请先确认覆盖章节后清空目标项目故事状态')
     return
   }
 
@@ -210,9 +232,13 @@ defineExpose({
           {{
             archiveImportMode === 'new-project'
               ? '新建项目也可以只导入部分模块；关系、章节版本等会自动带入必要依赖。'
-              : '只覆盖所选模块；关系、章节版本等会自动带入必要依赖，未选择的模块保持不变。'
+              : '只覆盖所选模块；关系、章节版本等会自动带入必要依赖。覆盖章节而不导入故事状态时会清空旧状态。'
           }}
         </div>
+        <n-checkbox
+          v-if="archiveImportMode === 'overwrite-project' && archiveSelectedModules.includes('chapters') && !archiveSelectedModules.includes('storyState')"
+          v-model:checked="acknowledgeStoryStateClear"
+        >我确认：覆盖章节后清空目标项目的旧故事状态</n-checkbox>
         <div class="archive-module-grid">
           <label
             v-for="option in archiveModuleOptions"

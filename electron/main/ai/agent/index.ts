@@ -24,7 +24,7 @@ import { createChapterTools } from './tools/chapter-tools'
 import { createProjectDataTools } from './tools/project-data-tools'
 import { buildAgentBehaviorRules, buildSkillIndex } from './system-prompt'
 import { formatAiErrorMessage } from '../error-message'
-import { buildSkillContentExcerpt } from '../skills/content-slice'
+import { buildSkillContentExcerpt, DIRECT_SKILL_MAX_CHARS } from '../skills/content-slice'
 import { annotateReferenceDeepAnalysisDocument } from '@shared/reference-deep-analysis'
 
 /**
@@ -93,7 +93,7 @@ export async function runAgentTask(
 
   const requiredSkillBlock = directlyInjectedSkillDefs.length && !usesDirectFingerprintMethod
     ? `\n\n## 已直接注入的 SKILLS（无需调用 skill_load 或 skill_read_reference）\n\n${directlyInjectedSkillDefs.map((s) => {
-        const body = buildSkillContentExcerpt(s, task, usesDirectFingerprintMethod ? 5200 : 2400)
+        const body = buildSkillContentExcerpt(s, task, DIRECT_SKILL_MAX_CHARS)
         return `### ${s.name}\n${body}`
       }).join('\n\n')}`
     : ''

@@ -9,11 +9,14 @@ const STAGE_KEYWORDS: Record<string, string[]> = {
   draft: ['正文', '章节', '叙事', '对话', '描写', '情绪', '润色', '文风']
 }
 
+/** 直接注入的单个 Skill 正文配额；当前内置 Skill 均可完整放入。 */
+export const DIRECT_SKILL_MAX_CHARS = 3200
+
 function stripFrontmatter(content: string): string {
   return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
 }
 
-function resolveKeywords(task: AiTaskPayload): string[] {
+function resolveKeywords(task: Pick<AiTaskPayload, 'task' | 'context'>): string[] {
   const stageId = String(task.context.stageId ?? '').trim()
   const taskName = String(task.task ?? '')
   const prompt = String(task.context.userPrompt ?? '')
@@ -27,16 +30,25 @@ function resolveKeywords(task: AiTaskPayload): string[] {
   return [...new Set(keywords)]
 }
 
-type MarkdownSection = { heading: string; text: string; index: number; score: number }
+type MarkdownSection = { heading: string; text: string; index: number; score: number; underInstructions: boolean }
 
 function splitSections(body: string): { intro: string; sections: MarkdownSection[] } {
   const matches = [...body.matchAll(/^#{2,3}\s+(.+)$/gm)]
   if (!matches.length) return { intro: body, sections: [] }
   const intro = body.slice(0, matches[0].index).trim()
+  let parentHeading = ''
   const sections = matches.map((match, index) => {
     const start = match.index ?? 0
     const end = matches[index + 1]?.index ?? body.length
-    return { heading: match[1].trim(), text: body.slice(start, end).trim(), index, score: 0 }
+    const heading = match[1].trim()
+    if (match[0].startsWith('## ')) parentHeading = heading
+    return {
+      heading,
+      text: body.slice(start, end).trim(),
+      index,
+      score: 0,
+      underInstructions: /^(Instructions|Guidelines|Rules|操作说明|执行步骤|核心写法|写作规则)$/i.test(parentHeading)
+    }
   })
   return { intro, sections }
 }
@@ -46,8 +58,8 @@ function splitSections(body: string): { intro: string; sections: MarkdownSection
  * 短 Skill 保持原文；长 Skill 保留简介、最相关章节和稳定的原始顺序。
  */
 export function buildSkillContentExcerpt(
-  skill: SkillDefinition,
-  task: AiTaskPayload,
+  skill: Pick<SkillDefinition, 'content'>,
+  task: Pick<AiTaskPayload, 'task' | 'context'>,
   maxChars = 5200
 ): string {
   const body = stripFrontmatter(skill.content).trim()
@@ -61,16 +73,18 @@ export function buildSkillContentExcerpt(
     ...section,
     score: keywords.reduce((score, keyword) => (
       section.heading.includes(keyword) ? score + 3 : score
-    ), /^(Purpose|When to Use|Checklist|用途|使用时机|检查清单)$/i.test(section.heading) ? 1 : 0)
+    ), /(?:第一优先级|最高优先级|核心原则|可读性底线|必须遵守)/.test(section.heading)
+      ? 12
+      : /^(Instructions|Guidelines|Rules|操作说明|执行步骤|核心写法|写作规则)$/i.test(section.heading) || section.underInstructions
+        ? 6
+        : /^(Purpose|When to Use|Checklist|用途|使用时机|检查清单)$/i.test(section.heading) ? 1 : 0)
   }))
   const picked: MarkdownSection[] = []
   let used = Math.min(intro.length, 900)
   for (const section of [...scored].sort((a, b) => b.score - a.score || a.index - b.index)) {
-    if (picked.length > 0 && section.score === 0) continue
     if (used + section.text.length > maxChars && picked.length > 0) continue
     picked.push(section)
     used += section.text.length
-    if (used >= maxChars * 0.82) break
   }
   if (!picked.length) picked.push(scored[0])
 

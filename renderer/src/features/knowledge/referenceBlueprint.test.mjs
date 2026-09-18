@@ -49,6 +49,23 @@ test('拆书创建小说先发散四条路线，用户选择后才生成骨架',
   assert.doesNotMatch(skill, /2026网文趋势关键词/)
 })
 
+test('拆书骨架优先细化首卷，远期卷不提前创建章节', () => {
+  const task = readSource('electron/main/ai/tasks/reference-project-blueprint.ts')
+  const seed = readSource('renderer/src/features/wizard/projectSeed.ts')
+  const modal = readSource('renderer/src/components/ReferenceProjectBlueprintModal.vue')
+  const outlinePanel = readSource('renderer/src/components/OutlinePanel.vue')
+
+  assert.match(task, /第一卷优先给出 8-12 个有因果递进的剧情节点/)
+  assert.match(task, /第二卷给出 3-6 个方向节点/)
+  assert.match(task, /更远的卷各保留 1-2 个关键里程碑/)
+  assert.match(task, /第一卷至少需要 8 个剧情节点/)
+  assert.match(task, /第一卷至少需要 16 个首批章节建议/)
+  assert.match(task, /第二卷及以后 chapterPlan 返回空数组/)
+  assert.match(seed, /if \(source\?\.volumeIndex !== 0\) return \[\]/)
+  assert.match(modal, /采用滚动规划/)
+  assert.match(outlinePanel, /若新剧情改变后续.*卷的前提，请核对承接并按需调整大纲/)
+})
+
 test('风格指纹优先注入正文，Codex CLI 拆书走宿主工具桥接', () => {
   const draft = readSource('renderer/src/components/chapterWorkspace/useChapterFirstDraft.ts')
   const orchestrator = readSource('electron/main/ai/runtime/orchestrator.ts')

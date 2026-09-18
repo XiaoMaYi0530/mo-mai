@@ -1,0 +1,4 @@
+interface:
+  display_name: "小说人工质感"
+  short_description: "让小说语言贴近具体人物与处境，减少模板表达，保留原有剧情和叙事声音"
+  default_prompt: "请用 $fiction-human-texture 处理下面的小说任务，保留剧情、设定和视角，让人物反应、对话与叙述更自然，只输出正文。"

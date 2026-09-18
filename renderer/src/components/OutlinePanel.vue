@@ -757,6 +757,11 @@ async function handleExpandVolumeOutline(volume: OutlineVolume, userPrompt = '')
       entries.map((entry) => `- ${entry.title ?? '新节点'}：${entry.conflict ?? '待补充核心冲突'}`).join('\n')
     )
 
+    const volumeIndex = appStore.outlineVolumes.findIndex((item) => item.id === volume.id)
+    const laterVolumes = appStore.outlineVolumes.slice(volumeIndex + 1)
+    if (laterVolumes.length) {
+      message.warning(`若新剧情改变后续 ${laterVolumes.length} 卷的前提，请核对承接并按需调整大纲。`)
+    }
     message.success(`已为 ${volume.title} 扩写 ${entries.length} 个大纲子节点`)
   } catch (error) {
     message.error(error instanceof Error ? error.message : '分卷子节点扩写失败，请稍后重试')

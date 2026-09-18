@@ -520,6 +520,34 @@ export const useAppStore = defineStore('app', () => {
     return `chapter-state-backfill:${projectId}`
   }
 
+  const queuedChapterStateSync = new Map<string, string[]>()
+  const activeChapterStateSync = new Map<string, Set<string>>()
+  const startingChapterStateSync = new Set<string>()
+
+  function enqueueChapterStateSync(projectId: string, chapterIds: string[]): boolean {
+    const queued = queuedChapterStateSync.get(projectId) ?? []
+    const known = new Set([...queued, ...(activeChapterStateSync.get(projectId) ?? [])])
+    const additions: string[] = []
+    for (const id of chapterIds) {
+      if (known.has(id)) continue
+      known.add(id)
+      additions.push(id)
+    }
+    if (additions.length === 0) return false
+    queuedChapterStateSync.set(projectId, [...queued, ...additions])
+    return true
+  }
+
+  function reportQueuedChapterStateSyncFailure(error: unknown): void {
+    console.error('[chapterStateSync] 排队的故事状态同步启动失败:', error)
+  }
+
+  function withQueuedChapterStateSyncCount(projectId: string, description: string): string {
+    const base = description.replace(/ · 后续排队 \d+ 章$/, '')
+    const count = queuedChapterStateSync.get(projectId)?.length ?? 0
+    return count > 0 ? `${base} · 后续排队 ${count} 章` : base
+  }
+
   function resolveBackfillProgress(payload: CharacterArcBackfillStateProgressPayload): number {
     if (payload.status === 'completed') return 100
     if (payload.total <= 0) return payload.phase === 'starting' ? 5 : 10
@@ -545,7 +573,8 @@ export const useAppStore = defineStore('app', () => {
     const key = backfillTaskKey(payload.projectId)
     const existing = aiTaskRuns.value.get(key)
     const isRunning = payload.status === 'running' || payload.status === 'pausing' || payload.status === 'paused'
-    if (existing?.runId && existing.runId !== payload.taskId && !isRunning) return
+    if (existing?.runId && existing.runId !== payload.taskId && (existing.stage === 'running' || !isRunning)) return
+    if (existing?.runId === payload.taskId && existing.stage !== 'running' && isRunning) return
 
     const startedAt = Date.parse(payload.startedAt) || existing?.startedAt || Date.now()
     replaceTaskRuns((next) => {
@@ -553,7 +582,7 @@ export const useAppStore = defineStore('app', () => {
         key,
         kind: 'chapter-post-process',
         label: '同步定稿章节故事状态',
-        description: describeBackfillTask(payload),
+        description: withQueuedChapterStateSyncCount(payload.projectId, describeBackfillTask(payload)),
         panel: 'project-knowledge',
         startedAt,
         finishedAt: isRunning ? undefined : Date.now(),
@@ -568,6 +597,12 @@ export const useAppStore = defineStore('app', () => {
       })
     })
 
+    if (!isRunning) {
+      activeChapterStateSync.delete(payload.projectId)
+      if (queuedChapterStateSync.get(payload.projectId)?.length) {
+        void drainChapterStateSyncQueue(payload.projectId).catch(reportQueuedChapterStateSyncFailure)
+      }
+    }
     if (isRunning || payload.status === 'failed') return
     window.setTimeout(() => {
       const current = aiTaskRuns.value.get(key)
@@ -577,15 +612,14 @@ export const useAppStore = defineStore('app', () => {
     }, AI_TASK_RETENTION_MS)
   }
 
-  async function startChapterStateSync(chapterIds: string[]): Promise<void> {
-    const projectId = selectedProjectId.value
-    const ids = [...new Set(chapterIds.map(String).filter(Boolean))]
-    if (!projectId || ids.length === 0) return
-
+  async function drainChapterStateSyncQueue(projectId: string): Promise<void> {
     const key = backfillTaskKey(projectId)
-    if (isAiTaskRunning(key)) {
-      throw new Error('该项目已有故事状态同步任务正在进行。')
-    }
+    if (startingChapterStateSync.has(projectId) || isAiTaskRunning(key)) return
+    const ids = queuedChapterStateSync.get(projectId) ?? []
+    if (ids.length === 0) return
+    queuedChapterStateSync.delete(projectId)
+    activeChapterStateSync.set(projectId, new Set(ids))
+    startingChapterStateSync.add(projectId)
     registerManualTask({
       key,
       kind: 'chapter-post-process',
@@ -601,14 +635,46 @@ export const useAppStore = defineStore('app', () => {
         selection: { mode: 'custom', chapterIds: ids }
       }))
       if (!response.success || !response.result?.taskId) {
+        if (response.error?.includes('已有状态补录任务正在进行')) {
+          const status = await window.characterArc.readBackfillTaskStatus(projectId)
+          if (status.success && status.result) {
+            queuedChapterStateSync.set(projectId, [
+              ...ids,
+              ...(queuedChapterStateSync.get(projectId) ?? []).filter((id) => !ids.includes(id))
+            ])
+            handleBackfillStateProgress(status.result)
+            return
+          }
+        }
         throw new Error(response.error ?? '未能创建故事状态同步任务')
       }
       handleBackfillStateProgress(response.result)
     } catch (error) {
       const detail = error instanceof Error ? error.message : '未知错误'
+      activeChapterStateSync.delete(projectId)
       finalizeManualTask(key, 'error', detail)
       throw error
+    } finally {
+      startingChapterStateSync.delete(projectId)
+      if (!isAiTaskRunning(key) && queuedChapterStateSync.get(projectId)?.length) {
+        void drainChapterStateSyncQueue(projectId).catch(reportQueuedChapterStateSyncFailure)
+      }
     }
+  }
+
+  async function startChapterStateSync(chapterIds: string[]): Promise<void> {
+    const projectId = selectedProjectId.value
+    const ids = [...new Set(chapterIds.map(String).filter(Boolean))]
+    if (!projectId || ids.length === 0 || !enqueueChapterStateSync(projectId, ids)) return
+    const key = backfillTaskKey(projectId)
+    const current = aiTaskRuns.value.get(key)
+    if (current?.stage === 'running') {
+      replaceTaskRuns((next) => next.set(key, {
+        ...current,
+        description: withQueuedChapterStateSyncCount(projectId, current.description ?? '')
+      }))
+    }
+    await drainChapterStateSyncQueue(projectId)
   }
 
   function getChapterPostGenerationIssues(chapterId: string): CharacterArcChapterPostGenerationIssuesPayload | null {

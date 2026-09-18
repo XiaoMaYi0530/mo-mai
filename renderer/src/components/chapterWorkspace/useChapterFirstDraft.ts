@@ -11,7 +11,7 @@ import { useAppStore } from '@/stores/app'
 import type { KnowledgeDocument } from '@/types/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
 import { stripReasoningMarkup } from '@/features/ai/reasoning'
-import { buildChapterWordCountIssue } from '@shared/chapter-audit-policy'
+import { buildChapterWordCountIssue, buildLocalChapterAudit } from '@shared/chapter-audit-policy'
 import { buildProjectStyleFingerprintContext } from '@shared/style-fingerprint-binding'
 
 const TASK_KEY = 'chapter-first-draft'
@@ -290,22 +290,6 @@ function normalizeAuditWordCount(
     issues,
     pass: criticalCount === 0 && warningCount <= 2
   }
-}
-
-function buildLocalDraftAudit(text: string, targetWordCount: number): ChapterAuditPayload {
-  const trimmed = text.trim()
-  const issues: ChapterAuditPayload['issues'] = []
-  const paragraphs = trimmed.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean)
-  const duplicates = paragraphs.length - new Set(paragraphs).size
-  if (duplicates > 0) {
-    issues.push({
-      severity: 'warning',
-      category: 'duplicate-paragraph',
-      ref: `检测到 ${duplicates} 个完全重复段落`,
-      hint: '建议人工检查重复段落；平衡模式不会为此额外调用 AI。'
-    })
-  }
-  return normalizeAuditWordCount({ pass: true, wordCount: trimmed.length, issues }, targetWordCount, trimmed.length)
 }
 
 function buildReferenceStyleContext(): string {
@@ -710,6 +694,11 @@ export function useChapterFirstDraft(): {
           let chapterMemo: ChapterFirstDraftContextInput['chapterMemo'] | undefined = resumedCheckpoint?.chapterMemo
           let checkpointText = resumedCheckpoint?.currentText ?? ''
           let latestAuditResult: ChapterAuditPayload | null = resumedCheckpoint?.auditResult ?? null
+          let auditedText: string | null = resumedCheckpoint?.completedSteps.includes('audit')
+            && !resumedCheckpoint.completedSteps.includes('repair')
+            && !resumedCheckpoint.completedSteps.includes('humanize')
+            ? checkpointText
+            : null
 
           const persistInternalDocuments = async (documents: KnowledgeDocument[], errorPrefix: string): Promise<void> => {
             appStore.mergeKnowledgeDocuments(documents)
@@ -1024,7 +1013,7 @@ export function useChapterFirstDraft(): {
             let finalText = checkpointText || fullText
 
             if (!steps.audit.enabled) {
-              const localAudit = buildLocalDraftAudit(finalText, targetWordCount)
+              const localAudit = buildLocalChapterAudit(finalText, targetWordCount)
               latestAuditResult = localAudit
               if (!localAudit.pass || localAudit.issues.length > 0) {
                 auditResult.value = localAudit
@@ -1038,6 +1027,9 @@ export function useChapterFirstDraft(): {
               if (skippedSteps.has('audit')) {
                 updateProgress(60, 'AI 深度审计已按失败策略跳过')
               } else if (completedSteps.has('audit') && latestAuditResult) {
+                if (!completedSteps.has('repair') && !completedSteps.has('humanize')) {
+                  auditedText = finalText
+                }
                 auditResult.value = latestAuditResult
                 updateProgress(60, '已从检查点恢复章节审计结果')
               } else {
@@ -1063,6 +1055,7 @@ export function useChapterFirstDraft(): {
                     targetWordCount,
                     finalText.trim().length
                   )
+                  auditedText = finalText
                   completedSteps.add('audit')
                   await saveCheckpoint()
                   auditResult.value = latestAuditResult
@@ -1185,6 +1178,30 @@ export function useChapterFirstDraft(): {
 
             finalText = finalCleanGeneratedChapterText(finalText)
             if (finalText) {
+              const finalLocalAudit = buildLocalChapterAudit(finalText, targetWordCount)
+              if (auditedText === finalText && latestAuditResult) {
+                const semanticAudit = normalizeAuditWordCount(latestAuditResult, targetWordCount, finalText.trim().length)
+                const addedIssues = finalLocalAudit.issues.filter((issue) => issue.category !== 'word-count')
+                latestAuditResult = {
+                  ...semanticAudit,
+                  issues: [...semanticAudit.issues, ...addedIssues],
+                  pass: semanticAudit.pass && finalLocalAudit.pass
+                }
+              } else {
+                // 修复、润色或最终清理之后，旧的 AI 审计不再代表即将保存的正文。
+                latestAuditResult = completedSteps.has('audit') && latestAuditResult
+                  ? {
+                      ...finalLocalAudit,
+                      issues: [...finalLocalAudit.issues, {
+                        severity: 'hint',
+                        category: 'audit-scope',
+                        ref: '最终稿与 AI 深度审计时的版本不同',
+                        hint: '最终稿已完成本地复验；此前的 AI 语义审计结果不作为最终稿通过证明。'
+                      }]
+                    }
+                  : finalLocalAudit
+              }
+              auditResult.value = latestAuditResult
               checkpointText = finalText
               executionLabel.value = '正在写入最终章节'
               updateProgress(95, '正在写入最终章节...')

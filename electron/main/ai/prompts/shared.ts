@@ -1,5 +1,6 @@
 import type { AiTaskKnowledgeContext } from '../shared-types'
 import type { SkillSelection } from '../skills/types'
+import { buildSkillContentExcerpt, DIRECT_SKILL_MAX_CHARS } from '../skills/content-slice.ts'
 
 /** 项目级 Skill 上下文条目的标准化结构 */
 type ProjectSkillContextEntry = {
@@ -70,7 +71,7 @@ function formatSection(label: string, entries: AiTaskKnowledgeContext['usedKnowl
 }
 
 /**
- * 将已挂载的 skill 内容格式化为 prompt 可用的文本块，最多取前 4 个。
+ * 将已挂载的 skill 内容格式化为 prompt 可用的文本块。
  *
  * @param skills 已选择的 skill 列表
  * @returns 格式化后的 skill 内容字符串，无数据时返回空串
@@ -79,11 +80,9 @@ export function formatMountedSkills(skills: SkillSelection[]): string {
   if (!skills.length) return ''
 
   return skills
-    .slice(0, 4)
     .map((skill, index) => {
-      // 剥掉 YAML frontmatter（--- ... ---），只保留正文部分给模型看。
-      // 这样 2000 字的配额全部用在实际规则和范例上，不被 metadata 占用。
-      const bodyContent = stripFrontmatter(skill.content).trim().slice(0, 2000)
+      // matcher 已按任务裁剪过；这里不能再从中间硬截一次，丢掉后半段规则。
+      const bodyContent = stripFrontmatter(skill.content).trim()
       const refs = skill.referenceContents
         .map((ref) => `  [参考: ${ref.file}]\n  ${ref.content.slice(0, 2000)}`)
         .join('\n\n')
@@ -130,7 +129,11 @@ export function formatProjectSkillsContext(rawSkills: unknown, maxSkills = 8): s
 
   return skills
     .map((skill, index) => {
-      const content = skill.content.trim().slice(0, 2200)
+      const content = buildSkillContentExcerpt(
+        { content: skill.content },
+        { task: 'global-assistant', context: {} },
+        DIRECT_SKILL_MAX_CHARS
+      )
       return [
         `项目 Skill ${index + 1}：${skill.name}`,
         skill.description ? `说明：${skill.description}` : '',

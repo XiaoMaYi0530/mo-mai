@@ -1,0 +1,4 @@
+interface:
+  display_name: "中文仙侠连载写作"
+  short_description: "为中文仙侠长篇提供快节奏创作、连续性维护与自然文风修订"
+  default_prompt: "使用 $chinese-xianxia-serial-writer 根据我的设定规划并撰写下一章。"

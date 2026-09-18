@@ -794,15 +794,17 @@ export async function extractStateDeltaViaLLMWithDiagnostics(
 只输出纯JSON，不要解释。JSON结构：
 {
   "entity_candidates": [{"kind":"character|organization","name":"正文中的准确专名","aliases":[],"role_or_type":"","description":"","source_quote":"包含该名称的正文原句","has_dialogue":false,"plot_impact":false,"explicit_importance":false}],
-  "characters_updated": [{"character_id":"","changes":{"location":{"from":"","to":""},"physical_state":"","mental_state":"","arc_progression":"","power_level":"","inventory_delta":{"added":[],"removed":[]},"new_knowledge":[],"goals_update":{"completed":[],"added":[]}}}],
+  "characters_updated": [{"character_id":"","changes":{"location":{"from":"","to":""},"physical_state":"","mental_state":"","arc_progression":"","power_level":"","inventory_delta":{"added":[],"removed":[]},"new_knowledge":[],"goals_update":{"completed":[],"added":[]},"active_state":{"goals":[],"inventory":[],"knowledge":[]}}}],
   "relationships_delta": [{"relationship_id":"","participants":["",""],"status_change":{"from":"","to":"","pivot_event":""},"new_tension_points":[],"resolved_tension_points":[],"lifecycle":"active"}],
   "foreshadowing_delta": {"planted":[{"id":"","type":"","description":"","method":""}],"advanced":[{"id":"","clue":"","method":""}],"resolved":[{"id":"","method":"","impact":""}],"abandoned":[{"id":"","reason":""}]},
-  "timeline": {"story_time_elapsed":"","current_story_date":"","events":[],"world_state_changes":[]}
+  "timeline": {"story_time_elapsed":"","current_story_date":"","events":[],"reader_knowledge":[],"world_state_changes":[]}
 }
 只包含实际发生变更的字段，无变更的字段省略。角色ID使用角色名称。
+对本章发生状态变化的角色，active_state 要给出本章结束时仍与后续剧情有关的完整当前清单；三个数组分别覆盖旧的目标、持有物和已知，不是新增项。目标只保留尚未达成且仍在追求的目标；物品只保留目前持有且有剧情作用的物品；已知只保留角色亲自掌握、尚有行动价值的关键事实。已达成目标、已失去或无足轻重的物品、过时或无关的已知不要保留。若某类已无有效项，明确写空数组。每类优先精简到 6 项以内；不要为凑数编造或把读者已知当角色已知。
 entity_candidates 只提取项目正式人物/组织库里尚不存在、且正文有准确专名的新人物或新势力。name 必须逐字出现在 source_quote 中；守卫、店小二、黑衣人、老人等泛称和一笔带过的路人不得提取。has_dialogue 表示有独立对白，plot_impact 表示对冲突、资源、关系或后续剧情有实际影响，explicit_importance 仅用于正文明确表明将持续参与主线的实体。不要为了凑数推测姓名。
 关系在本章发生互动时 lifecycle 写 active；明确暂时退出剧情或彻底结束时才写 dormant/archived。旧矛盾被化解时写入 resolved_tension_points。
-伏笔只有在正文明确回收时写 resolved，明确放弃或已被剧情否定时才写 abandoned；不要仅因本章没有提及就判定废弃。`,
+伏笔只有在正文明确回收时写 resolved，明确放弃或已被剧情否定时才写 abandoned；不要仅因本章没有提及就判定废弃。
+timeline.events 只记本章实际发生的客观事件；timeline.reader_knowledge 只记正文明确向读者揭示的新信息。叙述者或读者知道，不等于角色知道；characters_updated.new_knowledge 只记角色在正文中确实获知的信息。不得把猜测、未来大纲或未揭示的秘密当作已知事实。`,
     user: `当前世界状态：
 ${stateSnapshot || '（空）'}
 

@@ -62,6 +62,7 @@ export interface TimelineEntry {
   chapterIndex: number
   storyDate: string
   events: string[]
+  readerKnowledge: string[]
   worldStateChanges: string[]
 }
 
@@ -135,6 +136,7 @@ export interface StateDelta {
       inventory_delta?: { added: string[]; removed: string[] }
       new_knowledge?: string[]
       goals_update?: { completed: string[]; added: string[] }
+      active_state?: { goals?: string[]; inventory?: string[]; knowledge?: string[] }
     }
   }>
   relationships_delta: Array<{
@@ -155,6 +157,7 @@ export interface StateDelta {
     story_time_elapsed: string
     current_story_date: string
     events: string[]
+    reader_knowledge?: string[]
     world_state_changes?: string[]
   }
 }
@@ -179,8 +182,9 @@ function asString(value: unknown): string {
 }
 
 function asOptionalNumber(value: unknown): number | undefined {
+  if (value == null || asString(value) === '') return undefined
   const number = typeof value === 'number' ? value : Number(asString(value))
-  return Number.isFinite(number) ? number : undefined
+  return Number.isInteger(number) && number > 0 ? number : undefined
 }
 
 function uniqueStrings(value: unknown): string[] {
@@ -266,6 +270,13 @@ export function normalizeStateDelta(value: unknown): StateDelta {
     if (goalsCompleted.length || goalsAdded.length) {
       changes.goals_update = { completed: goalsCompleted, added: goalsAdded }
     }
+
+    const rawActiveState = asRecord(rawChanges.active_state)
+    const activeState: NonNullable<typeof changes.active_state> = {}
+    for (const key of ['goals', 'inventory', 'knowledge'] as const) {
+      if (Array.isArray(rawActiveState[key])) activeState[key] = uniqueStrings(rawActiveState[key])
+    }
+    if (Object.keys(activeState).length) changes.active_state = activeState
 
     return Object.keys(changes).length ? [{ character_id: characterId, changes }] : []
   })
@@ -361,6 +372,7 @@ export function normalizeStateDelta(value: unknown): StateDelta {
       story_time_elapsed: asString(rawTimeline.story_time_elapsed),
       current_story_date: asString(rawTimeline.current_story_date),
       events: uniqueStrings(rawTimeline.events),
+      reader_knowledge: uniqueStrings(rawTimeline.reader_knowledge),
       world_state_changes: uniqueStrings(rawTimeline.world_state_changes)
     }
   }
@@ -375,6 +387,7 @@ export function hasStateDeltaContent(delta: StateDelta): boolean {
     || delta.foreshadowing_delta.resolved.length > 0
     || delta.foreshadowing_delta.abandoned.length > 0
     || delta.timeline.events.length > 0
+    || Boolean(delta.timeline.reader_knowledge?.length)
     || Boolean(delta.timeline.world_state_changes?.length)
     || Boolean(delta.timeline.current_story_date)
     || Boolean(delta.timeline.story_time_elapsed)
@@ -400,9 +413,20 @@ export interface StoryStateOverview extends StoryStateContext {
   allForeshadowing: Foreshadowing[]
   allRelationships: Relationship[]
   entityCandidates: EntityCandidate[]
+  excludedCharacterIds: string[]
 }
 
 export type StoryStateLifecycleAction =
+  | {
+      kind: 'character-state-remove-entry'
+      entityId: string
+      field: 'goals' | 'inventory' | 'knowledge'
+      value: string
+    }
+  | {
+      kind: 'character-state-delete' | 'character-state-allow'
+      entityId: string
+    }
   | {
       kind: 'foreshadowing-status'
       entityId: string
@@ -450,6 +474,13 @@ const STORY_STATE_SCHEMA = `
 
   CREATE UNIQUE INDEX IF NOT EXISTS idx_char_state_unique
     ON story_character_state(project_id, character_id, chapter_index);
+
+  CREATE TABLE IF NOT EXISTS story_character_state_exclusions (
+    project_id TEXT NOT NULL,
+    character_id TEXT NOT NULL,
+    deleted_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, character_id)
+  ) STRICT;
 
   CREATE TABLE IF NOT EXISTS story_foreshadowing (
     id TEXT PRIMARY KEY,
@@ -514,6 +545,7 @@ const STORY_STATE_SCHEMA = `
     chapter_index INTEGER NOT NULL,
     story_date TEXT NOT NULL DEFAULT '',
     events_json TEXT NOT NULL DEFAULT '[]',
+    reader_knowledge_json TEXT NOT NULL DEFAULT '[]',
     world_state_changes_json TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL
   ) STRICT;
@@ -616,6 +648,8 @@ function now(): string {
 
 export function initStoryStateSchema(db: DatabaseSync): void {
   db.exec(STORY_STATE_SCHEMA)
+  db.exec('UPDATE story_foreshadowing SET payoff_chapter = NULL WHERE payoff_chapter <= 0')
+  ensureColumn(db, 'story_timeline', 'reader_knowledge_json', "TEXT NOT NULL DEFAULT '[]'")
   ensureColumn(db, 'story_foreshadowing', 'status_managed_by', "TEXT NOT NULL DEFAULT 'auto'")
   ensureColumn(db, 'story_relationships', 'lifecycle_status', "TEXT NOT NULL DEFAULT 'active'")
   ensureColumn(db, 'story_relationships', 'lifecycle_managed_by', "TEXT NOT NULL DEFAULT 'auto'")
@@ -667,6 +701,14 @@ export function getAllCharacterIds(db: DatabaseSync, projectId: string): string[
   )
   const rows = stmt.all(projectId) as Array<Record<string, unknown>>
   return rows.map((row) => String(row.character_id))
+}
+
+function getExcludedCharacterIds(db: DatabaseSync, projectId: string): string[] {
+  const rows = db.prepare(`
+    SELECT character_id FROM story_character_state_exclusions
+    WHERE project_id = ? ORDER BY deleted_at DESC, character_id
+  `).all(projectId) as Array<{ character_id: string }>
+  return rows.map((row) => row.character_id)
 }
 
 export function getActiveForeshadowing(
@@ -796,6 +838,7 @@ export function getRecentTimeline(
     chapterIndex: Number(row.chapter_index),
     storyDate: String(row.story_date ?? ''),
     events: parseJson<string[]>(row.events_json, []),
+    readerKnowledge: parseJson<string[]>(row.reader_knowledge_json, []),
     worldStateChanges: parseJson<string[]>(row.world_state_changes_json, [])
   }))
 }
@@ -971,7 +1014,7 @@ export function getForeshadowingHealth(
 ): ForeshadowingHealthReport {
   const active = getActiveForeshadowing(db, projectId, 999)
   const overdue = active
-    .filter((f) => f.payoffChapter != null && f.payoffChapter < currentChapter)
+    .filter((f) => f.payoffChapter != null && f.payoffChapter > 0 && f.payoffChapter < currentChapter)
     .map((f) => ({
       id: f.foreshadowingId,
       plantedChapter: f.plantedChapter,
@@ -1094,6 +1137,10 @@ export function updateStoryStateLifecycle(
   projectId: string,
   action: StoryStateLifecycleAction
 ): void {
+  if (!action.entityId?.trim()) throw new Error('缺少状态条目 ID。')
+  if (action.kind === 'character-state-remove-entry' && (
+    !['goals', 'inventory', 'knowledge'].includes(action.field) || !action.value?.trim()
+  )) throw new Error('缺少要移除的角色状态条目。')
   if (action.kind === 'foreshadowing-status' && !['active', 'advanced', 'resolved', 'abandoned'].includes(action.status)) {
     throw new Error('不支持的伏笔状态。')
   }
@@ -1109,7 +1156,34 @@ export function updateStoryStateLifecycle(
   const timestamp = now()
   db.exec('BEGIN')
   try {
-    if (action.kind === 'foreshadowing-status') {
+    if (action.kind === 'character-state-remove-entry') {
+      const column = { goals: 'goals_json', inventory: 'inventory_json', knowledge: 'knowledge_json' }[action.field]
+      const row = db.prepare(`
+        SELECT id, ${column} AS items_json FROM story_character_state
+        WHERE project_id = ? AND character_id = ?
+        ORDER BY chapter_index DESC LIMIT 1
+      `).get(projectId, action.entityId) as { id: string; items_json: string } | undefined
+      if (!row) throw new Error('角色状态不存在。')
+      const items = parseJson<string[]>(row.items_json, [])
+      const next = items.filter((item) => item !== action.value)
+      if (next.length === items.length) throw new Error('角色状态条目不存在，请刷新后重试。')
+      db.prepare(`UPDATE story_character_state SET ${column} = ?, updated_at = ? WHERE project_id = ? AND id = ?`)
+        .run(JSON.stringify(next), timestamp, projectId, row.id)
+    } else if (action.kind === 'character-state-delete') {
+      const removed = db.prepare(`
+        DELETE FROM story_character_state WHERE project_id = ? AND character_id = ?
+      `).run(projectId, action.entityId)
+      if (!removed.changes) throw new Error('角色状态不存在。')
+      db.prepare(`
+        INSERT OR REPLACE INTO story_character_state_exclusions (project_id, character_id, deleted_at)
+        VALUES (?, ?, ?)
+      `).run(projectId, action.entityId, timestamp)
+    } else if (action.kind === 'character-state-allow') {
+      const result = db.prepare(`
+        DELETE FROM story_character_state_exclusions WHERE project_id = ? AND character_id = ?
+      `).run(projectId, action.entityId)
+      if (!result.changes) throw new Error('该角色状态未被排除。')
+    } else if (action.kind === 'foreshadowing-status') {
       const row = db.prepare(`
         SELECT status FROM story_foreshadowing WHERE project_id = ? AND foreshadowing_id = ?
       `).get(projectId, action.entityId) as Record<string, unknown> | undefined
@@ -1205,6 +1279,10 @@ export function applyStateDelta(
 
   // Character state updates
   for (const charUpdate of normalizedDelta.characters_updated) {
+    const excluded = db.prepare(`
+      SELECT 1 FROM story_character_state_exclusions WHERE project_id = ? AND character_id = ?
+    `).get(projectId, charUpdate.character_id)
+    if (excluded) continue
     const existing = getLatestCharacterStates(db, projectId, [charUpdate.character_id])
     const prev = existing[0]
 
@@ -1221,11 +1299,17 @@ export function applyStateDelta(
       inventory = inventory.filter((item) => !removed.includes(item))
       inventory = [...new Set([...inventory, ...added])]
     }
+    if (charUpdate.changes.active_state?.inventory) {
+      inventory = charUpdate.changes.active_state.inventory
+    }
     const inventoryJson = JSON.stringify(inventory)
 
     let knowledge = prev?.knowledge ?? []
     if (charUpdate.changes.new_knowledge?.length) {
       knowledge = [...new Set([...knowledge, ...charUpdate.changes.new_knowledge])]
+    }
+    if (charUpdate.changes.active_state?.knowledge) {
+      knowledge = charUpdate.changes.active_state.knowledge
     }
     const knowledgeJson = JSON.stringify(knowledge)
 
@@ -1234,6 +1318,9 @@ export function applyStateDelta(
       const { completed = [], added = [] } = charUpdate.changes.goals_update
       goals = goals.filter((g) => !completed.includes(g))
       goals = [...new Set([...goals, ...added])]
+    }
+    if (charUpdate.changes.active_state?.goals) {
+      goals = charUpdate.changes.active_state.goals
     }
     const goalsJson = JSON.stringify(goals)
 
@@ -1382,12 +1469,13 @@ export function applyStateDelta(
   if (normalizedDelta.timeline) {
     db.prepare(`
       INSERT OR REPLACE INTO story_timeline
-        (id, project_id, chapter_index, story_date, events_json, world_state_changes_json, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, project_id, chapter_index, story_date, events_json, reader_knowledge_json, world_state_changes_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       uid(), projectId, chapterIndex,
       normalizedDelta.timeline.current_story_date ?? '',
       JSON.stringify(normalizedDelta.timeline.events ?? []),
+      JSON.stringify(normalizedDelta.timeline.reader_knowledge ?? []),
       JSON.stringify(normalizedDelta.timeline.world_state_changes ?? []),
       timestamp
     )
@@ -1410,17 +1498,29 @@ export function buildStoryStateContext(
   involvedCharacterIds: string[]
 ): StoryStateContext {
   const allCharIds = involvedCharacterIds.length
-    ? involvedCharacterIds
+    ? resolveStoryCharacterNames(db, projectId, involvedCharacterIds)
     : getAllCharacterIds(db, projectId)
 
   return {
     characterStates: getLatestCharacterStates(db, projectId, allCharIds),
-    activeForeshadowing: getActiveForeshadowing(db, projectId),
+    activeForeshadowing: getActiveForeshadowing(db, projectId, -1),
     relationships: getRelationships(db, projectId, allCharIds),
     recentTimeline: getRecentTimeline(db, projectId, 5),
     worldRules: getWorldRules(db, projectId),
     activeClocks: getActiveClocks(db, projectId)
   }
+}
+
+function resolveStoryCharacterNames(db: DatabaseSync, projectId: string, idsOrNames: string[]): string[] {
+  const values = [...new Set(idsOrNames.map((value) => value.trim()).filter(Boolean))]
+  if (!values.length) return []
+  // 人物卡使用 UUID；正文状态抽取使用姓名。保留原值以兼容旧状态或直接传姓名的调用方。
+  const placeholders = values.map(() => '?').join(',')
+  const tableExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'characters'").get()
+  if (!tableExists) return values
+  const rows = db.prepare(`SELECT name FROM characters WHERE project_id = ? AND id IN (${placeholders})`)
+    .all(projectId, ...values) as Array<{ name: string }>
+  return [...new Set([...values, ...rows.map((row) => row.name.trim()).filter(Boolean)])]
 }
 
 /** 面向管理界面的完整状态视图；写作上下文仍只注入活跃伏笔和活跃关系。 */
@@ -1432,7 +1532,8 @@ export function buildStoryStateOverview(db: DatabaseSync, projectId: string): St
     ...context,
     allForeshadowing: getAllForeshadowing(db, projectId),
     allRelationships: getRelationships(db, projectId, undefined, true, true),
-    entityCandidates: getEntityCandidates(db, projectId)
+    entityCandidates: getEntityCandidates(db, projectId),
+    excludedCharacterIds: getExcludedCharacterIds(db, projectId)
   }
 }
 
@@ -1448,18 +1549,33 @@ export function formatStoryStateForPrompt(ctx: StoryStateContext): string {
       if (c.powerLevel) parts.push(`能力[${c.powerLevel}]`)
       if (c.inventory.length) parts.push(`持有[${c.inventory.join('、')}]`)
       if (c.goals.length) parts.push(`目标[${c.goals.join('、')}]`)
+      if (c.knowledge.length) parts.push(`已知[${c.knowledge.slice(-12).join('、')}]`)
       return `- ${parts.join(', ')}`
     })
     sections.push(`### 角色当前状态\n${lines.join('\n')}`)
   }
 
   if (ctx.activeForeshadowing.length) {
-    const lines = ctx.activeForeshadowing.slice(0, 15).map((f) => {
+    const currentChapter = ctx.recentTimeline.reduce(
+      (latest, item) => Math.max(latest, item.chapterIndex),
+      ctx.activeForeshadowing.reduce((latest, item) => Math.max(latest, item.plantedChapter), 0)
+    )
+    const priority = (item: Foreshadowing): number => {
+      const latestActivity = item.clues.reduce((latest, clue) => Math.max(latest, clue.chapter), item.plantedChapter)
+      const payoffDistance = item.payoffChapter == null ? null : item.payoffChapter - currentChapter
+      const nearPayoff = payoffDistance !== null && payoffDistance >= -3 && payoffDistance <= 6
+      return latestActivity + (nearPayoff ? 1000 : 0)
+    }
+    const selected = [...ctx.activeForeshadowing]
+      .sort((a, b) => priority(b) - priority(a) || b.plantedChapter - a.plantedChapter)
+      .slice(0, 12)
+      .sort((a, b) => a.plantedChapter - b.plantedChapter)
+    const lines = selected.map((f) => {
       const clueCount = f.clues.length
       const payoff = f.payoffChapter ? `预定第${f.payoffChapter}章揭示` : '揭示时间待定'
-      return `- ${f.foreshadowingId}[${f.status}]: ${f.description} (第${f.plantedChapter}章埋设, 已释放${clueCount}条线索, ${payoff})`
+      return `- ${f.foreshadowingId}[${f.status}]: ${f.description.slice(0, 120)} (第${f.plantedChapter}章埋设, 已释放${clueCount}条线索, ${payoff})`
     })
-    sections.push(`### 活跃伏笔 (${ctx.activeForeshadowing.length}条)\n${lines.join('\n')}`)
+    sections.push(`### 活跃伏笔（共${ctx.activeForeshadowing.length}条，当前精选${selected.length}条）\n${lines.join('\n')}`)
   }
 
   if (ctx.relationships.length) {
@@ -1473,7 +1589,9 @@ export function formatStoryStateForPrompt(ctx: StoryStateContext): string {
   if (ctx.recentTimeline.length) {
     const lines = ctx.recentTimeline.map((t) => {
       const date = t.storyDate ? `[${t.storyDate}]` : ''
-      return `- 第${t.chapterIndex}章${date}: ${t.events.join('; ')}`
+      const facts = t.events.length ? `发生：${t.events.join('; ')}` : ''
+      const reader = t.readerKnowledge.length ? `读者已知：${t.readerKnowledge.join('; ')}` : ''
+      return `- 第${t.chapterIndex}章${date}: ${[facts, reader].filter(Boolean).join('；')}`
     })
     sections.push(`### 近期时间线\n${lines.join('\n')}`)
   }

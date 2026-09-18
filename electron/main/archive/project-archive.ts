@@ -1,12 +1,15 @@
 import JSZip from 'jszip'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { Worker } from 'node:worker_threads'
 
 import { getWorkspaceDirPath } from '../workspace-store'
+import { countProjectStoryState, readProjectStoryState, replaceProjectStoryState, type ProjectStoryStateArchive } from './project-story-state-archive'
+import { validateStoryStateModuleSelection } from './project-archive-selection'
+import { collectProjectSkillsForArchive, restoreProjectSkillsFromArchive, validateArchivedProjectSkills, type ArchivedProjectSkill } from './project-skill-archive'
 import { stagedChangesStore } from '../ai/runtime-v2/staged-changes-store'
 import {
   normalizeWorkspacePayload,
@@ -38,6 +41,7 @@ export type ProjectArchiveModule =
   | 'outline'
   | 'plotThreads'
   | 'chapters'
+  | 'storyState'
   | 'chapterVersions'
   | 'workflowDocuments'
   | 'knowledgeDocuments'
@@ -70,6 +74,8 @@ type ProjectArchiveContent = {
   project: ProjectRecord
   workspace: ProjectWorkspace
   assistantV2: AssistantV2Archive
+  storyState: ProjectStoryStateArchive | null
+  customSkills: ArchivedProjectSkill[]
   knowledgeDocuments: Array<WorkspaceKnowledgeDocument & { projectId?: string }>
   referenceWorks: WorkspaceReferenceWork[]
   referenceNovelAssets: Map<string, Buffer>
@@ -178,6 +184,7 @@ const ALL_ARCHIVE_MODULES: ProjectArchiveModule[] = [
   'outline',
   'plotThreads',
   'chapters',
+  'storyState',
   'chapterVersions',
   'workflowDocuments',
   'knowledgeDocuments',
@@ -468,6 +475,8 @@ function buildManifest(
   project: ProjectRecord,
   workspace: ProjectWorkspace,
   assistantV2: AssistantV2Archive,
+  storyState: ProjectStoryStateArchive,
+  customSkills: ArchivedProjectSkill[],
   knowledgeDocuments: WorkspaceKnowledgeDocument[],
   referenceWorks: WorkspaceReferenceWork[],
   assetCount: number
@@ -490,6 +499,8 @@ function buildManifest(
       outline: { count: workspace.outlineVolumes.length + workspace.outlineItems.length },
       plotThreads: { count: workspace.plotThreads.length },
       chapters: { count: workspace.chapters.length },
+      storyState: { count: countProjectStoryState(storyState) },
+      customSkills: { count: customSkills.length },
       chapterVersions: { count: workspace.chapterVersions.length },
       workflowDocuments: {
         count:
@@ -541,6 +552,10 @@ export async function exportProjectArchive(options: ExportProjectArchiveOptions)
     !projectKnowledgeDocuments.some((current) => current.id === document.id)
   ))]
   const assistantV2 = readAssistantV2Archive(options.db, project.id)
+  const storyState = readProjectStoryState(options.db, project.id)
+  const customSkills = await collectProjectSkillsForArchive(
+    dirname(getWorkspaceDirPath()), project.id, project.projectSkills ?? []
+  )
   const zip = new JSZip()
   const assetDir = join(getWorkspaceDirPath(), 'reference-novels')
   let assetCount = 0
@@ -553,7 +568,7 @@ export async function exportProjectArchive(options: ExportProjectArchiveOptions)
     assetCount++
   }
 
-  const manifest = buildManifest(project, workspace, assistantV2, knowledgeDocuments, referenceWorks, assetCount)
+  const manifest = buildManifest(project, workspace, assistantV2, storyState, customSkills, knowledgeDocuments, referenceWorks, assetCount)
   addJson(zip, 'manifest.json', manifest)
   addJson(zip, 'project.json', project)
   addJson(zip, 'workspace/worldview.json', workspace.worldviewEntries)
@@ -572,6 +587,8 @@ export async function exportProjectArchive(options: ExportProjectArchiveOptions)
   })
   addJson(zip, 'workspace/plotThreads.json', workspace.plotThreads)
   addJson(zip, 'workspace/chapters.json', workspace.chapters)
+  addJson(zip, 'workspace/storyState.json', storyState)
+  addJson(zip, 'workspace/customSkills.json', customSkills)
   addJson(zip, 'workspace/chapterVersions.json', workspace.chapterVersions)
   addJson(zip, 'workspace/workflowDocuments.json', workspace.workflowDocuments)
   addJson(zip, 'workspace/knowledgeDocuments.json', knowledgeDocuments)
@@ -662,6 +679,8 @@ async function readArchiveContent(filePath: string): Promise<ProjectArchiveConte
     project,
     workspace,
     assistantV2: normalizeAssistantV2Archive(assistantPayload.assistantV2),
+    storyState: await readZipJson<ProjectStoryStateArchive | null>(zip, 'workspace/storyState.json', null),
+    customSkills: await readZipJson<ArchivedProjectSkill[]>(zip, 'workspace/customSkills.json', []),
     knowledgeDocuments: await readZipJson(zip, 'workspace/knowledgeDocuments.json', []),
     referenceWorks: await readZipJson(zip, 'workspace/referenceWorks.json', []),
     referenceNovelAssets: assets
@@ -734,7 +753,7 @@ function remapArchiveContent(
   content: ProjectArchiveContent,
   targetProjectId: string,
   modules: Set<ProjectArchiveModule>
-): ProjectArchiveContent {
+): { content: ProjectArchiveContent; idMap: Map<string, string> } {
   const idMap = new Map<string, string>([[content.project.id, targetProjectId]])
   const assign = (id: string | undefined, prefix: string): string => {
     if (!id) return ''
@@ -896,13 +915,16 @@ function remapArchiveContent(
   const assistantV2 = remapAssistantV2Archive(content.assistantV2, targetProjectId, idMap, modules)
 
   return {
-    ...content,
-    project,
-    workspace,
-    assistantV2,
-    knowledgeDocuments,
-    referenceWorks,
-    referenceNovelAssets: assets
+    content: {
+      ...content,
+      project,
+      workspace,
+      assistantV2,
+      knowledgeDocuments,
+      referenceWorks,
+      referenceNovelAssets: assets
+    },
+    idMap
   }
 }
 
@@ -989,6 +1011,8 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
   const modules = expandModules(options.modules)
   options.onProgress?.({ phase: 'reading', message: '正在读取备份文件...', percent: 18 })
   const sourceContent = await readArchiveContent(options.filePath)
+  if (modules.has('project')) validateArchivedProjectSkills(sourceContent.customSkills)
+  validateStoryStateModuleSelection(modules, sourceContent.storyState !== null)
   const targetProjectId =
     options.mode === 'new-project'
       ? idWithPrefix('project')
@@ -998,7 +1022,7 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
   }
 
   options.onProgress?.({ phase: 'mapping', message: '正在整理备份中的项目数据...', percent: 36 })
-  const incoming = remapArchiveContent(sourceContent, targetProjectId, modules)
+  const { content: incoming, idMap } = remapArchiveContent(sourceContent, targetProjectId, modules)
   const nextPayload: WorkspacePayload = {
     ...snapshot,
     // 项目归档不覆盖本机 AI Key、主题和公告相关设置，只更新项目内容。
@@ -1034,6 +1058,7 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
               writingStylePrompt: incoming.project.writingStylePrompt,
               novelWorkflowStages: incoming.project.novelWorkflowStages,
               projectSkills: incoming.project.projectSkills,
+              skillPolicy: incoming.project.skillPolicy,
               skillPresetBindings: incoming.project.skillPresetBindings,
               chapterAssistantTemplates: incoming.project.chapterAssistantTemplates,
               coverHistory: incoming.project.coverHistory,
@@ -1078,6 +1103,15 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
   const normalized = normalizeWorkspacePayload(nextPayload)
   options.onProgress?.({ phase: 'writing', message: '正在写入本地数据库...', percent: 72 })
   options.writeWorkspaceSnapshot(options.db, normalized)
+  if (modules.has('chapters')) {
+    // 旧版归档没有故事状态；章节被覆盖时仍须清除目标项目的旧状态。
+    replaceProjectStoryState(
+      options.db,
+      targetProjectId,
+      modules.has('storyState') ? incoming.storyState ?? {} : {},
+      idMap
+    )
+  }
   if (modules.has('assistantSessions')) {
     options.onProgress?.({ phase: 'assistant', message: '正在恢复助手会话...', percent: 84 })
     writeAssistantV2Archive(
@@ -1087,7 +1121,12 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
       options.mode === 'overwrite-project'
     )
   }
-  options.onProgress?.({ phase: 'assets', message: '正在恢复参考原文资产...', percent: 92 })
+  options.onProgress?.({ phase: 'assets', message: '正在恢复自定义 Skill 与参考原文资产...', percent: 92 })
+  if (modules.has('project') && incoming.customSkills.length > 0) {
+    await restoreProjectSkillsFromArchive(
+      dirname(getWorkspaceDirPath()), targetProjectId, incoming.customSkills
+    )
+  }
   await restoreReferenceNovelAssets(incoming.referenceNovelAssets)
   return { selectedProjectId: targetProjectId }
 }

@@ -10,6 +10,7 @@ import type { NovelWorkflowStageId, ProjectSkillItem } from '@/types/app'
 import type { SkillUsePolicy } from '@shared/assistant-runtime'
 import type { SkillPresetId } from '@shared/skill-presets'
 import SkillPolicyPicker from '@/components/assistantV2/SkillPolicyPicker.vue'
+import { resolveFirstDraftSkillDefault } from './firstDraftSkillDefaults'
 import {
   createDefaultFirstDraftSteps,
   createFirstDraftStepsForStrategy,
@@ -432,6 +433,10 @@ watch(() => props.show, (visible) => {
   showAdvanced.value = false
   expandedStepId.value = 'draft'
   Object.assign(steps, createFirstDraftStepsForStrategy('balanced'))
+  const draftSkillDefault = resolveFirstDraftSkillDefault(project.value?.skillPolicy, project.value?.skillPresetBindings)
+  steps.draft.skillMode = draftSkillDefault.mode
+  steps.draft.skillIds = draftSkillDefault.skillIds
+  steps.draft.skillPresetId = draftSkillDefault.presetId
   const outline = currentOutlineItem.value
   const defaultContract = findChapterWritingContract(appStore.knowledgeDocuments, chapter.value?.id ?? '')
     ?? normalizeChapterWritingContract({

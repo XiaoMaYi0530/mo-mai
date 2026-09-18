@@ -415,12 +415,16 @@ function createProject(): void {
           </div>
         </section>
 
+        <n-alert type="info" :show-icon="false">
+          采用滚动规划：首卷生成较细的剧情节点和首批章节；第二卷保留阶段推进，后续卷只锁定关键结果。首批章节不代表已覆盖整卷目标字数，写作时可继续扩展当前卷；前卷的改动影响后续里程碑时，再按需调整后续大纲。
+        </n-alert>
+
         <n-collapse class="volume-review" accordion>
           <n-collapse-item
             v-for="(volume, index) in groupedOutline"
             :key="`${index}-${volume.title}`"
             :name="index"
-            :title="`${volume.title} · ${volume.entries.length} 个节点 · ${volume.entries.reduce((count, entry) => count + Math.max(1, entry.chapterPlan?.length || 0), 0)} 章建议`"
+            :title="`${volume.title} · ${volume.entries.length} 个节点${index === 0 ? ` · 首批 ${volume.entries.reduce((count, entry) => count + (entry.chapterPlan?.length || 0), 0)} 章建议` : ''}`"
           >
             <p class="volume-summary">{{ volume.summary }}</p>
             <ol class="beat-list">

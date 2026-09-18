@@ -88,6 +88,10 @@ test('默认、失败和自定义范围不会重复选择已完成章节，全�
 
   assert.deepEqual(selectBackfillChapterStatuses(statuses).map((item) => item.chapterId), ['c3', 'c4', 'c5'])
   assert.deepEqual(selectBackfillChapterStatuses(statuses, { mode: 'failed' }).map((item) => item.chapterId), ['c3'])
+  assert.deepEqual(selectBackfillChapterStatuses(statuses, { mode: 'unscanned' }).map((item) => item.chapterId), ['c4', 'c5'])
+  assert.deepEqual(selectBackfillChapterStatuses(statuses, {
+    mode: 'range', chapterIds: ['c1', 'c2', 'c4']
+  }).map((item) => item.chapterId), ['c1', 'c2', 'c4'])
   assert.deepEqual(selectBackfillChapterStatuses(statuses, {
     mode: 'custom', chapterIds: ['c1', 'c4', 'c5']
   }).map((item) => item.chapterId), ['c4', 'c5'])
