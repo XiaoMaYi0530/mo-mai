@@ -10,6 +10,7 @@ export interface AssistantRuntimePlan {
   maxReadToolCalls: number
   maxSearchToolCalls: number
   maxStageChanges: number
+  maxModelCalls: number
   defaultReadLimit: number
   allowFullChapterRead: boolean
   allowFullProjectModuleRead: boolean
@@ -23,6 +24,7 @@ export interface AssistantRuntimePlan {
 }
 
 const BASE_CONTEXT: ContextProviderId[] = ['project-brief', 'project-digest', 'recent-messages', 'skill-index']
+const OUTLINE_TARGET_PATTERN = /(大纲|剧情节点|卷纲|分卷|第[零一二两三四五六七八九十百\d]+卷)/
 
 /** 具体的章节修改方向词——命中说明用户已给出明确改法，无需追问。对齐 v1。 */
 const CONCRETE_EDIT_DIRECTIONS = [
@@ -73,8 +75,14 @@ export function createRuntimePlan(params: {
   const isChapterSurface = params.surface.scope === 'chapter' || params.surface.scope === 'selection'
   const isProjectSurface = params.surface.scope === 'project'
   const isEdit = intent === 'edit'
+  const isChapterSplit = isProjectSurface && /(拆分|拆成|拆章|分章).*章节|章节.*(拆分|拆成|拆章|分章)/.test(
+    params.request.userMessage.replace(/\s+/g, '')
+  )
   const isOutlineEntityEdit = isProjectSurface && intent === 'entity-edit' &&
-    /(大纲|剧情节点|卷纲|分卷)/.test(params.request.userMessage.replace(/\s+/g, ''))
+    OUTLINE_TARGET_PATTERN.test(params.request.userMessage.replace(/\s+/g, ''))
+  const isProjectBulkWrite = isProjectSurface && !isChapterSplit && !isOutlineEntityEdit && (
+    intent === 'ingest' || (requiresBatching && (isEdit || intent === 'entity-edit' || intent === 'correct'))
+  )
 
   // 全局场景下检测"指向章节但方向模糊"的编辑意图，追加提示阻止直接改正文。
   // 章节 surface 本就以改写为主，不注入此提示。
@@ -86,19 +94,28 @@ export function createRuntimePlan(params: {
     intent,
     contextMode: isChapterSurface ? 'chapter' : intent === 'chat' || intent === 'ingest' ? 'minimal' : 'targeted',
     contextProviders: resolveContextProviders(intent, params.surface, params.request.userMessage),
-    maxReadToolCalls: isProjectSurface ? (requiresBatching ? 8 : 6) : (requiresBatching ? 5 : 4),
-    maxSearchToolCalls: isProjectSurface ? 3 : 2,
-    // 全局大纲常按一组剧情节点调整。两项上限会迫使助手反复续批，并诱发重复提案；
-    // 只放宽大纲编辑，其他实体仍维持较小批次，避免一次生成过多待审内容。
-    maxStageChanges: isOutlineEntityEdit ? 8 : intent === 'ingest' || intent === 'correct' || isEdit ? 5 : 2,
-    defaultReadLimit: requiresBatching ? 5 : 3,
+    maxReadToolCalls: isOutlineEntityEdit ? 16 : isProjectBulkWrite ? 12 : isChapterSplit ? 8 : isProjectSurface ? (requiresBatching ? 8 : 6) : (requiresBatching ? 5 : 4),
+    maxSearchToolCalls: isOutlineEntityEdit ? 10 : isProjectBulkWrite ? 6 : isProjectSurface ? 3 : 2,
+    // 项目级录入与批量改写往往包含多种实体；避免每五项就中断，但单轮仍有审阅边界。
+    maxStageChanges: isOutlineEntityEdit ? 30 : isProjectBulkWrite ? 20 : isChapterSplit ? 12 : isProjectSurface && intent === 'entity-edit' ? 12 : intent === 'ingest' || intent === 'correct' || isEdit ? 5 : 2,
+    maxModelCalls: isOutlineEntityEdit ? Math.max(params.surface.maxSteps, 40) : isProjectBulkWrite ? Math.max(params.surface.maxSteps, 32) : isChapterSplit ? Math.max(params.surface.maxSteps, 18) : params.surface.maxSteps,
+    defaultReadLimit: isOutlineEntityEdit || requiresBatching ? 5 : 3,
     allowFullChapterRead: isEdit || params.surface.scope === 'selection' || params.surface.scope === 'project',
     allowFullProjectModuleRead: false,
     enforceToolBudgets,
     requiresBatching,
-    continuationLabel: requiresBatching ? '继续分析下一批' : '继续补充证据',
-    continuationPrompt: buildContinuationPrompt(intent),
-    guidance: buildGuidance(intent, requiresBatching, enforceToolBudgets) + vagueEditNote
+    continuationLabel: isOutlineEntityEdit ? '继续生成下一批大纲' : isChapterSplit ? '继续拆分下一批章节' : requiresBatching ? '继续分析下一批' : '继续补充证据',
+    continuationPrompt: isChapterSplit
+      ? '继续上一轮拆章：先核对已存在的真实章节，避免重复创建；沿用现有分卷和上位大纲，暂存剩余章节实体。不要把章节标题误建成大纲节点。'
+      : isOutlineEntityEdit
+      ? '继续上一轮大纲/分卷设计：先核对已暂存节点，不重复创建；在已确认分卷下继续暂存剩余可审阅节点。资料足够时不要重复搜索。'
+      : buildContinuationPrompt(intent),
+    guidance: buildGuidance(intent, requiresBatching, enforceToolBudgets)
+      + (isOutlineEntityEdit ? '\n大纲/分卷任务：搜索达到上限时只停止搜索；若目标分卷 ID、用户已确认的结构和必要设定已明确，继续暂存可审阅节点，不要只列计划并要求用户重新发消息。单批最多暂存 30 项，剩余节点再续批；不要把聊天文字说成已暂存。' : '')
+      + (isProjectBulkWrite ? '\n项目级批量录入/修改：尽量在本轮完成用户明确提供的全部内容，不要默认只暂存 5 项后请用户继续。单轮最多暂存 20 项；只有实际达到工具预算、缺少必要事实或用户材料本身不完整时才说明未完成部分。' : '')
+      + (isChapterSplit ? '\n拆分章节任务：产物必须是章节实体。用 stage_chapter_create 暂存新增章节；需保留已有正文时，用 stage_chapter_edit 和 stage_chapter_update 调整原章。多个章节可以绑定同一个现有上位大纲，不要求每章先新建大纲；用户未要求改大纲时禁止用 stage_outline 代替建章。仅在实际工具调用收到额度拒绝时才能声称额度耗尽，不能凭估计停止。' : '')
+      + '\n只有实际工具调用被额度规则拒绝时，才可向用户报告额度上限；不要在读取或暂存额度尚未耗尽时声称已达上限。'
+      + vagueEditNote
   }
 }
 
@@ -106,6 +123,10 @@ function resolveIntent(request: TurnSendRequest, surface: SurfaceDefinition): As
   if (surface.scope === 'chapter' || surface.scope === 'selection') return 'edit'
 
   const text = request.userMessage.replace(/\s+/g, '')
+  // “伏笔/矛盾”等主题词不应盖过明确的大纲创建动作；真正的审计动词仍优先。
+  if (OUTLINE_TARGET_PATTERN.test(text)
+    && /(生成|设计|规划|编排|创建|新建|新增|补齐)/.test(text)
+    && !/(审计|检查|核对|评估)/.test(text)) return 'entity-edit'
   if (/(审计|检查|矛盾|风险|OOC|ooc|连续性|伏笔)/.test(text)) return 'audit'
   if (hasEntityEditIntent(text) || hasFrameworkAdviceRequest(text)) return 'entity-edit'
   if (/(修正|纠正|统一|跑偏|冲突|不一致)/.test(text)) return 'correct'
@@ -119,7 +140,7 @@ function resolveIntent(request: TurnSendRequest, surface: SurfaceDefinition): As
 }
 
 function hasEntityEditIntent(text: string): boolean {
-  const mentionsEntity = /(设定|人设|人物|角色|组织|势力|世界观|大纲|线索)/.test(text)
+  const mentionsEntity = /(设定|人设|人物|角色|组织|势力|世界观|大纲|剧情节点|卷纲|分卷|第[零一二两三四五六七八九十百\d]+卷|线索)/.test(text)
   const asksToChange = /(修改|改一下|调整|优化|处理|重写|改写|重做|替换|补充|新增|删除|完全重写)/.test(text)
   return mentionsEntity && asksToChange
 }
@@ -132,7 +153,7 @@ function shouldBatch(text: string, intent: AssistantPlanIntent): boolean {
   const compact = text.replace(/\s+/g, '')
   if (intent === 'audit') return true
   if (/(全项目|整个项目|所有|全部|全书|完整审计|系统性)/.test(compact)) return true
-  return compact.length > 180 && (intent === 'correct' || intent === 'ingest')
+  return compact.length > 180 && (intent === 'correct' || intent === 'ingest' || intent === 'edit' || intent === 'entity-edit')
 }
 
 function resolveContextProviders(
@@ -168,7 +189,7 @@ function resolveTargetedEntityProviders(userMessage: string): ContextProviderId[
   if (/(世界观|设定|规则|体系|能力|境界)/.test(text)) providers.push('worldview')
   if (/(人物|角色|人设|主角|配角|关系)/.test(text)) providers.push('characters')
   if (/(组织|势力|学院|宗门|家族|成员|归属)/.test(text)) providers.push('organizations')
-  if (/(大纲|剧情节点|卷纲|章节|正文|冲突)/.test(text)) providers.push('outline')
+  if (/(大纲|剧情节点|卷纲|分卷|第[零一二两三四五六七八九十百\d]+卷|章节|正文|冲突)/.test(text)) providers.push('outline')
   if (/(线索|伏笔|悬念)/.test(text)) providers.push('plot-threads')
   if (/(计划|进度|当前状态|创作记忆)/.test(text)) providers.push('workflow-documents')
   return [...new Set(providers)]
@@ -199,7 +220,7 @@ function buildGuidance(
   const executionMode = !enforceToolBudgets
     ? '项目级助手不设置读取、搜索或暂存次数预算；请在当前请求内按需完成任务，证据充分后停止读取。'
     : requiresBatching
-    ? '本次按分批任务处理：先完成第一批证据读取与阶段结论，必要时提示用户继续下一批。'
+    ? '本次按批量任务处理：尽量完成当前请求；只有确有未完成内容时才提示继续下一批。'
     : '本次按轻量任务处理：证据足够后立即停止读取。'
   return [
     executionMode,

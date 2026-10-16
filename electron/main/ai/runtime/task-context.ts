@@ -2,6 +2,7 @@ import type { AiTaskPayload, AppSettings } from '../shared-types'
 import { ensureWorkspaceDb } from '../../workspace-store'
 import { buildStoryStateContext, formatStoryStateForPrompt } from '../../story-state-store'
 import { retrieveHybridContext, formatSemanticSegmentsForPrompt } from '../knowledge-retrieval'
+import { buildGameWritingContext } from '../../game-progression-store'
 
 const STORY_STATE_TASKS: ReadonlySet<string> = new Set([
   'story-deep-audit',
@@ -28,6 +29,17 @@ export async function enrichTaskContextForGeneration(
 ): Promise<void> {
   const projectId = String(task.context.projectId ?? '').trim()
   if (!projectId) {
+    return
+  }
+
+  if (task.task === 'chapter-humanize' || task.task === 'chapter-repair') {
+    try {
+      const db = await ensureWorkspaceDb()
+      const gameBlock = buildGameWritingContext(db, projectId, String(task.context.chapterId ?? ''))
+      if (gameBlock) task.context.gameProgressionBlock = gameBlock
+    } catch {
+      task.context.gameProgressionBlock = '游戏数值账本当前不可读取，不得新增或改写任何精确数值。'
+    }
     return
   }
 

@@ -13,6 +13,7 @@ import DeconstructionLibraryPage from '@/pages/DeconstructionLibraryPage.vue'
 import SkillsPage from '@/pages/SkillsPage.vue'
 import CoverWorkbenchPage from '@/pages/CoverWorkbenchPage.vue'
 import FanqieTrendsPage from '@/pages/FanqieTrendsPage.vue'
+import EquipmentGeneratorPage from '@/pages/EquipmentGeneratorPage.vue'
 import TitlebarModelSwitcher from '@/components/TitlebarModelSwitcher.vue'
 import TitlebarAiTaskCenter from '@/components/TitlebarAiTaskCenter.vue'
 
@@ -23,6 +24,12 @@ const platform = window.characterArc?.platform ?? 'unknown'
 const appName = '墨脉'
 const appVersion = window.characterArc?.version ?? ''
 const { message } = createDiscreteApi(['message'])
+watch(
+  () => appStore.syncConflictNotice,
+  (notice) => {
+    if (notice) message.warning(`检测到 ${notice.chapterCount} 章同步冲突：正在编辑的正文已保留，另一份已存入“章节历史版本”。`)
+  }
+)
 let themeTransitionFrame: number | null = null
 
 // 根据当前选中主题生成 Naive UI 主题覆盖变量
@@ -220,6 +227,7 @@ onBeforeUnmount(() => {
               <SkillsPage v-else-if="appStore.currentView === 'skills'" key="skills" />
               <CoverWorkbenchPage v-else-if="appStore.currentView === 'cover-workbench'" key="cover-workbench" />
               <FanqieTrendsPage v-else-if="appStore.currentView === 'fanqie-trends'" key="fanqie-trends" />
+              <EquipmentGeneratorPage v-else-if="appStore.currentView === 'equipment-generator'" key="equipment-generator" />
               <WorkbenchPage v-else key="workbench" />
             </Transition>
           </div>

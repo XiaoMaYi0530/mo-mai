@@ -1,3 +1,4 @@
+import { decodeReadReceipt, type ProjectReadReceipt } from '@shared/project-read-receipt'
 /**
  * useAssistant · Runtime v2 通用 composable
  *
@@ -40,6 +41,7 @@ export interface AssistantToolCallView {
   toolName: string
   args: Record<string, unknown>
   status: 'running' | 'ok' | 'error'
+  readReceipt?: ProjectReadReceipt
   resultPreview?: string
   durationMs?: number
 }
@@ -380,7 +382,9 @@ export function useAssistant(options: UseAssistantOptions) {
           const existing = toolById.get(evt.toolUseId)
           if (existing) {
             existing.status = evt.isError ? 'error' : 'ok'
-            existing.resultPreview = evt.content.slice(0, 200)
+            const decoded = decodeReadReceipt(evt.content)
+            if (!evt.isError) existing.readReceipt = decoded.receipt
+            existing.resultPreview = decoded.body.slice(0, 200)
             existing.durationMs = evt.durationMs
           }
           break

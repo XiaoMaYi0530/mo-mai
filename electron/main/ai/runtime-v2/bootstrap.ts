@@ -28,6 +28,9 @@ export interface BootstrapAssistantRuntimeDeps {
   emitAiRunEvent?: (payload: { projectId: string; meta: Record<string, unknown> }) => void
   /** 写库成功后刷新主进程快照并通知渲染进程。 */
   refreshSnapshot?: () => Promise<void>
+  /** 暂存批量写回期间阻止旧窗口提交全量工作区快照。 */
+  beginCommit?: () => void
+  endCommit?: () => void
 }
 
 export function bootstrapAssistantRuntime(deps: BootstrapAssistantRuntimeDeps): void {
@@ -65,6 +68,8 @@ export function bootstrapAssistantRuntime(deps: BootstrapAssistantRuntimeDeps): 
     resolveTurnExecutionPlan,
     commitChange,
     afterCommit: deps.refreshSnapshot,
+    beginCommit: deps.beginCommit,
+    endCommit: deps.endCommit,
     emitAiRunEvent: deps.emitAiRunEvent
   })
 }

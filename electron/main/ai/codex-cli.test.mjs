@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 
 import { buildCodexExecArgs, parseCodexJsonLine, resolveCodexCommand } from './codex-cli.ts'
+import { buildCodexImagePrompt, generateImageViaCodexCli } from './codex-image.ts'
 import { normalizeSettings, validateSettings } from './settings.ts'
 import { getAiProviderCatalogEntry, shouldTryStreamingAgent } from '../../shared/ai-provider-catalog.ts'
 
@@ -76,6 +81,24 @@ test('Codex CLI 路径拒绝混入 shell 环境变量', () => {
   )
 })
 
+test('macOS GUI 精简 PATH 能找到 ChatGPT.app 内置的 Codex CLI', {
+  skip: process.platform !== 'darwin' || !existsSync('/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex')
+}, () => {
+  const previousPath = process.env.PATH
+  const previousHome = process.env.HOME
+  try {
+    process.env.PATH = '/usr/bin:/bin'
+    process.env.HOME = '/private/tmp/mo-mai-no-codex-home'
+    const command = resolveCodexCommand(codexSettings)
+    assert.equal(command.program, '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex')
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+  }
+})
+
 test('Codex JSONL 事件转换为正文、推理和 token 用量', () => {
   const reasoning = []
   assert.deepEqual(
@@ -98,4 +121,65 @@ test('Codex JSONL 事件转换为正文、推理和 token 用量', () => {
     parseCodexJsonLine('{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":8}}'),
     { usage: { promptTokens: 12, completionTokens: 8, totalTokens: 20 } }
   )
+})
+
+async function withFakeCodex(source, run) {
+  const dir = await mkdtemp(join(tmpdir(), 'mo-mai-fake-codex-'))
+  const executable = join(dir, 'codex')
+  try {
+    await writeFile(executable, `#!/usr/bin/env node\n${source}\n`)
+    await chmod(executable, 0o755)
+    await run(executable)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+test('本机 Codex 封面模式复用 CLI 登录并读取隔离目录里的 PNG', {
+  skip: process.platform === 'win32'
+}, async () => {
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/Y6kAAAAASUVORK5CYII='
+  await withFakeCodex(`
+    const fs = require('node:fs')
+    const path = require('node:path')
+    let prompt = ''
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', (chunk) => { prompt += chunk })
+    process.stdin.on('end', () => {
+      if (!process.argv.includes('workspace-write') || !prompt.includes('$imagegen') || !prompt.includes('cover.png') || prompt.includes('sensitive-image-key')) {
+        process.exitCode = 2
+        return
+      }
+      fs.writeFileSync(path.join(process.cwd(), 'cover.png'), Buffer.from(${JSON.stringify(png)}, 'base64'))
+      process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2, output_tokens: 3 } }) + '\\n')
+    })
+  `, async (codexCliPath) => {
+    const result = await generateImageViaCodexCli({ ...codexSettings, codexCliPath, imageProvider: 'codex-cli-local', imageApiKey: 'sensitive-image-key' }, '蓝色圆形封面')
+    assert.equal(result.dataUrl, `data:image/png;base64,${png}`)
+    assert.equal(result.usage?.totalTokens, 5)
+  })
+})
+
+test('本机 Codex 未生成真实图片时报告错误，不接受文字路径', {
+  skip: process.platform === 'win32'
+}, async () => {
+  await withFakeCodex(`
+    process.stdin.resume()
+    process.stdin.on('end', () => {
+      process.stdout.write(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '/tmp/cover.png' } }) + '\\n')
+      process.stdout.write(JSON.stringify({ type: 'turn.completed' }) + '\\n')
+    })
+  `, async (codexCliPath) => {
+    await assert.rejects(
+      generateImageViaCodexCli({ ...codexSettings, codexCliPath, imageProvider: 'codex-cli-local' }, '封面'),
+      /没有生成封面图片/
+    )
+  })
+})
+
+test('本机生图提示词明确使用 imagegen 并固定输出文件', () => {
+  const prompt = buildCodexImagePrompt('玄幻学院', '/tmp/cover.png')
+  assert.match(prompt, /^\$imagegen/m)
+  assert.match(prompt, /\/tmp\/cover\.png/)
+  assert.match(prompt, /玄幻学院/)
 })

@@ -40,6 +40,7 @@ import { normalizeWorkbenchMenuOrder } from './workbenchMenu'
 
 // 持久化到本地存储的完整应用状态结构
 export interface StoredState {
+  workspaceRevision?: number
   theme: ThemeName
   selectedProjectId: string
   projects: ProjectSummary[]
@@ -98,6 +99,7 @@ export function normalizeChapterAssistantTemplates(
 export function normalizeProjectSummary(project: ProjectSummary): ProjectSummary {
   return {
     ...project,
+    premise: typeof project.premise === 'string' ? project.premise.trim() : '',
     novelLength: normalizeNovelLength(project.novelLength),
     wordCount: project.wordCount?.trim() || '待统计',
     writingStylePresetId: project.writingStylePresetId?.trim() || 'cinematic-cool',

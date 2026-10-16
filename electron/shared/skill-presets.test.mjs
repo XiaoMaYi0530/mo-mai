@@ -12,6 +12,16 @@ const skills = [
   { id: 'novel-compliance', name: '内容合规检查' }
 ]
 
+test('网游正文预设加入数值战斗 Skill，其他题材不加入', () => {
+  const available = [...skills, { id: 'game-combat-writing', name: '网游数值战斗写作', genreIds: ['game'] }]
+  const game = resolveSkillPreset('draft', available, '网游升级')
+  assert.ok(game.policy.skillIds.includes('game-combat-writing'))
+  assert.deepEqual(game.missingRoles, [])
+  const romance = resolveSkillPreset('draft', available, '都市言情')
+  assert.ok(!romance.policy.skillIds.includes('game-combat-writing'))
+  assert.deepEqual(romance.missingRoles, [])
+})
+
 test('五套创作预设名称清晰且 ID 唯一', () => {
   assert.deepEqual(SKILL_PRESETS.map((item) => item.name), ['正文创作', '正文润色', '大纲设计', '设定建设', '审计检查'])
   assert.equal(new Set(SKILL_PRESETS.map((item) => item.id)).size, SKILL_PRESETS.length)

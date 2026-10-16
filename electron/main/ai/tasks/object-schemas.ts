@@ -46,6 +46,12 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
   'premise-enhance': z.object({
     premise: stringField
   }),
+  'premise-dialog': z.object({
+    reply: stringField,
+    questions: stringList,
+    premise: stringField,
+    ready: z.boolean()
+  }),
   'assistant-intent': z.object({
     intent: z.enum(['chat', 'proposal']),
     reason: stringField
@@ -242,6 +248,19 @@ const taskObjectSchemas: Partial<Record<AiTaskName, z.ZodTypeAny>> = {
         summary: stringField
       })),
       volumeIndex: z.number()
+    }))
+  }),
+  'reference-blueprint-revise': z.object({
+    reply: stringField,
+    edits: z.array(z.object({
+      target: z.enum(['volume', 'node', 'chapter']),
+      action: z.enum(['update', 'insert', 'delete']),
+      volumeIndex: z.number(),
+      nodeIndex: z.number().optional(),
+      chapterIndex: z.number().optional(),
+      title: stringField.optional(),
+      conflict: stringField.optional(),
+      summary: stringField.optional()
     }))
   }),
   'inspiration-pack': z.object({

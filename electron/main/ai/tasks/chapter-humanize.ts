@@ -23,9 +23,10 @@ const handler: TaskHandler = {
   buildPrompt(input: PromptBuildInput) {
     const { context, capabilityPreamble, skillsBlock } = input
     const projectSkillsBlock = formatProjectSkillsContext(context.projectSkills)
-    const skillsSection = projectSkillsBlock || skillsBlock
+    const baseSkillsSection = projectSkillsBlock || skillsBlock
       ? `\n\n== 本步骤启用的提示词 Skills ==\n${projectSkillsBlock || ''}${projectSkillsBlock && skillsBlock ? '\n\n== 自动命中的补充 Skills ==\n' : ''}${skillsBlock || ''}`
       : ''
+    const skillsSection = `${baseSkillsSection}${context.gameProgressionBlock ? `\n\n== 游戏数值账本（事实约束，不得改写数值） ==\n${String(context.gameProgressionBlock)}` : ''}`
 
     return {
       system: `${capabilityPreamble.system}\n\n你是中文小说整章去 AI 味润色编辑。你只改表达质感，不改剧情设计。输出必须是可直接写入章节编辑器的正文。\n\n${PROSE_CLARITY_RULES}`,

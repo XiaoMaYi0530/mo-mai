@@ -19,6 +19,9 @@ import { createChapterTools } from '../agent/tools/chapter-tools'
 import { createProjectDataTools } from '../agent/tools/project-data-tools'
 import { createKnowledgeTools } from '../agent/tools/knowledge-tools'
 import { createSkillTools } from '../agent/tools/skill-tools'
+import { createGameProgressionTools } from '../agent/tools/game-progression-tools'
+import { buildGameWritingContext, readGameProject } from '../../game-progression-store'
+import { ensureWorkspaceDb } from '../../workspace-store'
 import { getAllSkills, getSkillById, resolveSkillEnabledOverrides, resolveTaskSkills } from '../skills'
 import type { SkillDefinition } from '../skills'
 import { normalizeSettings, validateSettings } from '../settings'
@@ -79,6 +82,7 @@ const CONTEXT_LABELS: Partial<Record<ContextProviderId, string>> = {
 }
 
 function estimateModelCalls(plan: AssistantRuntimePlan): string {
+  if (plan.intent === 'entity-edit' && plan.maxStageChanges > 8) return '通常 4–12 轮'
   if (plan.requiresBatching) return '通常 2–6 轮'
   if (plan.intent === 'edit' || plan.intent === 'entity-edit' || plan.intent === 'correct') return '通常 2–4 轮'
   return '通常 1–3 轮'
@@ -140,7 +144,19 @@ export function createExecutionPlanner(
       scopeRef: activeScopeRef,
       budgetTokens: contextBudgetTokens
     })
-    const contextBlock = assembleContextBlock(contextResult)
+    const currentChapterId = extractCurrentChapterId(activeScopeRef) ?? ''
+    let gameEnabled = false
+    let gameContextBlock = ''
+    if (currentChapterId && surface.id === 'chapter-panel') {
+      try {
+        const db = await ensureWorkspaceDb()
+        gameEnabled = readGameProject(db, session.projectId).data.enabled
+        if (gameEnabled) gameContextBlock = buildGameWritingContext(db, session.projectId, currentChapterId)
+      } catch {
+        gameContextBlock = '【游戏数值账本读取失败】本轮不要编造等级、装备、称号或属性数值。'
+      }
+    }
+    const contextBlock = [assembleContextBlock(contextResult), gameContextBlock].filter(Boolean).join('\n\n---\n\n')
     const skillTask = createV2SkillTask({
       session,
       surface,
@@ -176,7 +192,6 @@ export function createExecutionPlanner(
     //    - 技能：skill_list / skill_load / (skill_run_script 由内置 skill 决定)
     //    - 知识：knowledge_save_document（审计等任务直接归档）+ stage_knowledge_document（可审阅 CRUD）
     //    - 变更暂存：stage_chapter_* / stage_* 实体工具（闭包 turnId/sessionId）
-    const currentChapterId = extractCurrentChapterId(activeScopeRef) ?? ''
     const chapterReadTools = createChapterTools({
       currentChapterId,
       useDiffReview: false
@@ -198,14 +213,16 @@ export function createExecutionPlanner(
       resolveSkill: (id) => getSkillById(id, session.projectId || undefined),
       listSkills: () => getAllSkills(session.projectId || undefined),
       resolveSkillEnabled: (skill) => skillEnabledOverrides?.get(skill.id) ?? skill.enabled,
-      // 执行计划是唯一授权来源：不在本轮 selected 中的 Skill 无法再被模型按 id 绕过加载。
-      allowSkillUse: (skill) => allowedSkillIds.has(skill.id),
+      // 自动模式的匹配结果只是推荐；“仅使用”模式才将加载范围限定为已选 Skill。
+      allowSkillUse: (skill) => skill.compatibility !== 'external-only'
+        && (skillPolicy.mode !== 'only' || allowedSkillIds.has(skill.id)),
       resolveSkillLoadContent: (skill) => buildSkillContentExcerpt(skill, skillTask),
       // 只允许 builtin skill 跑脚本，跟旧路径一致
       allowScriptExecution: (skill) => skill.scope === 'builtin'
     })
 
     const toolFactory: ToolFactory = (ctx) => {
+      const gameTools = gameEnabled ? createGameProgressionTools(currentChapterId, ctx.turnId) : []
       const stageChapterEdit = makeStageChapterEditTool({
         sessionId: ctx.sessionId,
         turnId: ctx.turnId,
@@ -253,6 +270,7 @@ export function createExecutionPlanner(
       const combined: Tool[] = [
         ...chapterReadTools,
         ...projectDataTools,
+        ...gameTools,
         ...knowledgeTools,
         ...skillTools,
         stageChapterEdit,
@@ -330,7 +348,7 @@ export function createExecutionPlanner(
       previewWarnings.push(`有 ${contextResult.truncatedProviderIds.length} 类上下文未直接注入，AI 将通过工具按需查询。`)
     }
     if (skillPolicy.mode === 'auto' && matchedSkillDefs.length === 0) {
-      previewWarnings.push('自动模式下本轮没有匹配到可用 Skill，将只使用项目上下文和助手默认规则。')
+      previewWarnings.push('自动模式下本轮没有预选 Skill；助手仍可按需加载项目中已启用的 Skill。')
     }
     if (skillPolicy.mode === 'only' && matchedSkillDefs.length === 0) {
       previewWarnings.push('固定使用的 Skill 均不适用当前任务，将不注入 Skill，也不会改用组合外的 Skill。')
@@ -351,7 +369,7 @@ export function createExecutionPlanner(
       provider: settings.provider,
       model: settings.model,
       estimatedModelCalls: estimateModelCalls(runtimePlan),
-      maxModelCalls: surface.maxSteps,
+      maxModelCalls: runtimePlan.maxModelCalls,
       writesToStaging: runtimePlan.intent !== 'chat' && !surface.autoCommit,
       warnings: previewWarnings
     }

@@ -17,6 +17,8 @@ type SkillPresetRole = {
   label: string
   aliases: string[]
   fallbackAliases?: string[]
+  /** 仅在项目题材明确匹配时启用此可选角色。 */
+  genreIds?: SkillGenreId[]
 }
 
 export type SkillPresetDefinition = {
@@ -50,6 +52,11 @@ export const SKILL_PRESETS: SkillPresetDefinition[] = [
         label: '人物驱动自然文风',
         aliases: ['我吃西红柿笔锋', 'fiction-human-texture', '写作润色'],
         fallbackAliases: ['novel-language-style', '语言与文风']
+      },
+      {
+        label: '网游数值战斗',
+        aliases: ['game-combat-writing', '网游数值战斗写作'],
+        genreIds: ['game']
       }
     ]
   },
@@ -194,6 +201,7 @@ export function resolveSkillPreset(
   const missingRoles: string[] = []
 
   for (const role of preset.roles) {
+    if (role.genreIds && matchSkillGenre(role.genreIds, projectGenre) !== 'match') continue
     const compatibleSkills = availableSkills.filter((skill) => (
       matchSkillGenre(skill.genreIds, projectGenre) !== 'mismatch'
     ))

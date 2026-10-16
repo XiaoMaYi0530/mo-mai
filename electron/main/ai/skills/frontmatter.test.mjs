@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { parseSkillFrontmatter } from './frontmatter.ts'
 
@@ -29,4 +30,14 @@ manifest:
     },
     { file: 'references/b.md' }
   ])
+})
+
+test('网游数值战斗 Skill 声明为可用的游戏正文技能', () => {
+  const content = readFileSync(new URL('../../../../resources/skills/game-combat-writing/SKILL.md', import.meta.url), 'utf8')
+  const parsed = parseSkillFrontmatter(content)
+  assert.equal(parsed.name, '网游数值战斗写作')
+  assert.equal(parsed.overrides.enabled, true)
+  assert.deepEqual(parsed.manifest?.genres, ['game'])
+  assert.ok(parsed.manifest?.stages?.includes('draft'))
+  assert.ok(parsed.manifest?.tasks?.includes('chapter-first-draft'))
 })

@@ -58,6 +58,7 @@ export function normalizeSettings(settings: AppSettings): AppSettings {
     presencePenalty: normalizeOptionalNumber(settings.presencePenalty, -2, 2),
     frequencyPenalty: normalizeOptionalNumber(settings.frequencyPenalty, -2, 2),
     embeddingModel: settings.embeddingModel?.trim() || '',
+    imageProvider: settings.imageProvider?.trim() || '',
     imageModel: settings.imageModel?.trim() || '',
     imageApiKey: settings.imageApiKey?.trim() || '',
     imageBaseUrl: settings.imageBaseUrl?.trim() || '',
@@ -116,9 +117,12 @@ export function resolveMaxTokens(task?: AiTaskPayload): number | undefined {
   switch (task?.task) {
     case 'project-bootstrap':
       return 1500
+    case 'premise-dialog':
+      return 1600
     case 'story-concept-options':
       return 6000
     case 'reference-project-blueprint':
+    case 'reference-blueprint-revise':
       return 12000
     case 'chapter-analysis':
     case 'reference-style-chunk':

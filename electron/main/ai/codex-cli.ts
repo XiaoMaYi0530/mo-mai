@@ -61,7 +61,11 @@ function candidateExecutableDirs(): string[] {
       dirs.push(join(process.env.HOME, '.volta', 'bin'))
     }
     dirs.push('/opt/homebrew/bin', '/usr/local/bin', '/usr/bin')
-    dirs.push('/Applications/ChatGPT.app/Contents/Resources')
+    // ChatGPT 桌面版将 Codex CLI 放在嵌套的 CodexCLI.app 中，GUI 进程的 PATH 通常找不到它。
+    dirs.push('/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS')
+    if (process.env.HOME) {
+      dirs.push(join(process.env.HOME, 'Applications', 'ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS'))
+    }
   }
   return [...new Set(dirs)]
 }

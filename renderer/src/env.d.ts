@@ -24,6 +24,7 @@ declare global {
     | 'plotThreads'
     | 'chapters'
     | 'storyState'
+    | 'gameProgression'
     | 'chapterVersions'
     | 'workflowDocuments'
     | 'knowledgeDocuments'
@@ -344,18 +345,29 @@ declare global {
       saveWorkspace: (payload: unknown) => Promise<{
         success: boolean
         error?: string
+        revision?: number
       }>
       saveWorkspaceSync: (payload: unknown) => {
         success: boolean
         error?: string
+        revision?: number
       }
       saveAppSettings: (
         payload: import('@shared/ipc-types').SaveAppSettingsRequest
       ) => Promise<import('@shared/ipc-types').IpcResult>
+      gameRead: (projectId: string) => Promise<{ success: boolean; result?: import('../../electron/main/game-progression-store').GameProjectRow; error?: string }>
+      gameCommand: (request: { projectId: string; expectedRevision: number; command: import('../../electron/main/game-progression-store').GameCommand }) => Promise<{ success: boolean; result?: import('../../electron/main/game-progression-store').GameProjectRow; error?: string }>
+      gameSnapshot: (request: { projectId: string; characterId: string; chapterId: string }) => Promise<{ success: boolean; result?: import('../../electron/shared/game-progression').GameSnapshot; error?: string }>
+      gamePreview: (request: { projectId: string; characterId: string; chapterId: string; operation: import('../../electron/shared/game-progression').GameOperation }) => Promise<{ success: boolean; result?: import('../../electron/shared/game-progression').GamePreview; error?: string }>
+      gameSearch: (request: { projectId: string; query: string; kind?: import('../../electron/shared/game-progression').GameAssetKind }) => Promise<{ success: boolean; result?: import('../../electron/shared/game-progression').GameAsset[]; error?: string }>
+      gameImportPreview: (projectId: string) => Promise<{ success: boolean; canceled?: boolean; result?: { fileName: string; assets: import('../../electron/shared/game-progression').GameAsset[] }; error?: string }>
+      gameExportTemplate: (projectId: string) => Promise<{ success: boolean; canceled?: boolean; filePath?: string; error?: string }>
+      gameRollbackAiRun: (request: { projectId: string; aiRunId: string }) => Promise<{ success: boolean; result?: import('../../electron/main/game-progression-store').GameProjectRow; error?: string }>
       pickCoverImage: () => Promise<{
         success: boolean
         canceled: boolean
         filePath?: string
+        coverUrl?: string
         dataUrl?: string
       }>
       pickContinuationNovel: () => Promise<{
@@ -497,6 +509,12 @@ declare global {
         success: boolean
         canceled?: boolean
         filePath?: string
+        error?: string
+      }>
+      installProjectCover: (payload: { dataUrl: string; projectId: string }) => Promise<{
+        success: boolean
+        filePath?: string
+        coverUrl?: string
         error?: string
       }>
       exportJson: (payload: CharacterArcExportRequest | unknown) => Promise<{
@@ -647,6 +665,13 @@ declare global {
         success: boolean
         error?: string
       }>
+      listWorkspaceBackups: () => Promise<{
+        success: boolean
+        backups?: Array<{ name: string; createdAt: string; sizeBytes: number; projectTitles: string[]; assetMode: 'complete' | 'database-only' }>
+        error?: string
+      }>
+      createWorkspaceBackup: () => Promise<{ success: boolean; error?: string }>
+      restoreWorkspaceBackup: (name: string) => Promise<{ success: boolean; error?: string }>
       onWorkspaceSync: (callback: (payload: unknown) => void) => () => void
       onReferenceImportProgress: (callback: (payload: CharacterArcReferenceImportProgressPayload) => void) => () => void
       onProjectArchiveImportProgress: (callback: (payload: CharacterArcProjectArchiveImportProgressPayload) => void) => () => void

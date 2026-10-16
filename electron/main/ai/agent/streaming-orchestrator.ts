@@ -12,6 +12,9 @@ import { createKnowledgeTools } from './tools/knowledge-tools'
 import { createChapterTools } from './tools/chapter-tools'
 import { createProjectDataTools } from './tools/project-data-tools'
 import { createSettingProposalTools, createEmptySettingProposalDraft, settingProposalHasContent } from './tools/setting-proposal-tools'
+import { createGameProgressionTools } from './tools/game-progression-tools'
+import { readGameProject } from '../../game-progression-store'
+import { ensureWorkspaceDb } from '../../workspace-store'
 import { buildAgentBehaviorRules, buildSkillIndex } from './system-prompt'
 import { getRecentSkillUsage, formatSkillUsageHint, recordSkillUsage } from './skill-usage-memory'
 import { readFileSync, existsSync } from 'node:fs'
@@ -53,12 +56,17 @@ export async function runStreamingAgentTask(
   task: AiTaskPayload,
   handlers: AiAgentStreamHandlers,
   signal: AbortSignal,
-  knowledgeContext?: AiTaskKnowledgeContext
+  knowledgeContext?: AiTaskKnowledgeContext,
+  aiRunId = ''
 ): Promise<AiTaskResponse> {
   const settings = normalizeSettings(task.settings)
   validateSettings(settings)
   const startedAt = new Date().toISOString()
   const chapterId = String(task.context.chapterId ?? '').trim() || undefined
+  let gameEnabled = false
+  if (chapterId && task.context.projectId && (task.task === 'chapter-first-draft' || task.task === 'chapter-assistant')) {
+    try { gameEnabled = readGameProject(await ensureWorkspaceDb(), String(task.context.projectId)).data.enabled } catch { /* ordinary projects are unaffected */ }
+  }
 
   const handler = getTaskHandler(task.task)
   const { projectId, skills: candidateSkills, usedSkillIds, policy: skillPolicy } = await resolveTaskSkills(task)
@@ -92,7 +100,7 @@ export async function runStreamingAgentTask(
     : candidateSkillDefs.filter((s) => !s.manifest.required)
   const allowedSkillIds = new Set(candidateSkillDefs.map((skill) => skill.id))
   const skillEnabledOverrides = resolveSkillEnabledOverrides(task, projectId)
-  const maxSteps = resolveStreamingAgentMaxSteps(task.task)
+  const maxSteps = gameEnabled && task.task === 'chapter-first-draft' ? 10 : resolveStreamingAgentMaxSteps(task.task)
 
   const requiredSkillBlock = requiredSkillDefs.length
     ? `\n\n## ${skillPolicy.mode === 'only' ? '本轮仅使用的 SKILLS（不得混用其他 Skill）' : '强制生效的 SKILLS'}\n\n${requiredSkillDefs.map((s) => {
@@ -250,14 +258,18 @@ export async function runStreamingAgentTask(
       ].join('\n')
     : ''
 
+  const gameRules = gameEnabled ? `\n## 游戏数值账本\n本作品启用了可选游戏数值档案。涉及明确升级、加点、获得/消耗物品、换装、学习技能、称号或特殊物品变化时，先用 read_game_state 核对人物和目录 ID，再用 stage_game_change 暂存变化并读取精确前后数值，随后继续写正文。只在大纲、写作备忘或作者指令确实要求变化时暂存，不为凑数自行升级或发明装备、技能。目录外物品与技能、未经确认的加成和不存在的属性点不得编造。暂存不等于定稿，作者可在“数值”页撤销。若本章没有数值变化，直接按账本起始值写作。` : ''
+
   const skillIndexBlock = task.task === 'chapter-first-draft' ? '' : buildSkillIndex(optionalSkillDefs)
-  const systemPrompt = `${prompt.system}${requiredSkillBlock}${preloadedSkillRefsBlock}${chapterToolsBlock}${contextModulesBlock}\n${skillIndexBlock}\n${buildAgentBehaviorRules()}${globalAssistantRules}${settingProposalRules}${chapterDraftRules}${skillUsageHints}`
+  const systemPrompt = `${prompt.system}${requiredSkillBlock}${preloadedSkillRefsBlock}${chapterToolsBlock}${contextModulesBlock}\n${skillIndexBlock}\n${buildAgentBehaviorRules()}${globalAssistantRules}${settingProposalRules}${chapterDraftRules}${gameRules}${skillUsageHints}`
 
   const skillTools = skillPolicy.mode === 'off' ? [] : createSkillTools({
     resolveSkill: (id) => getSkillById(id, projectId || undefined),
     listSkills: () => getAllSkills(projectId || undefined),
     resolveSkillEnabled: (skill) => skillEnabledOverrides?.get(skill.id) ?? skill.enabled,
-    allowSkillUse: (skill) => allowedSkillIds.has(skill.id),
+    // 自动模式的候选列表只是推荐；模型仍可按需加载项目中已启用的其他 Skill。
+    allowSkillUse: (skill) => skill.compatibility !== 'external-only'
+      && (skillPolicy.mode !== 'only' || allowedSkillIds.has(skill.id)),
     resolveSkillLoadContent: (skill) => buildSkillContentExcerpt(skill, task),
     allowScriptExecution: (skill) => skill.scope === 'builtin'
   })
@@ -286,8 +298,11 @@ export async function runStreamingAgentTask(
   const settingProposalTools = task.task === 'global-assistant'
     ? createSettingProposalTools({ draft: settingProposalDraft })
     : []
+  const gameTools = gameEnabled ? createGameProgressionTools(chapterId ?? '', aiRunId) : []
 
-  const registry = [...skillTools, ...knowledgeTools, ...chapterTools, ...projectDataTools, ...settingProposalTools]
+  const registry = gameEnabled && task.task === 'chapter-first-draft'
+    ? [...gameTools, ...projectDataTools]
+    : [...skillTools, ...knowledgeTools, ...chapterTools, ...projectDataTools, ...settingProposalTools, ...gameTools]
 
   logPrompt('AGENT_STREAM', settings, { system: systemPrompt, user: prompt.user }, task.task, usedSkillIds)
   const requestStartedAt = Date.now()
@@ -302,7 +317,7 @@ export async function runStreamingAgentTask(
       handlers,
       maxTokens,
       maxSteps,
-      disableTools: task.task === 'chapter-first-draft'
+      disableTools: task.task === 'chapter-first-draft' && !gameEnabled
     })
 
     logResponse('AGENT_STREAM', settings, task.task, loopResult.finalText, Date.now() - requestStartedAt, { usedSkills: usedSkillIds })

@@ -14,10 +14,12 @@ import {
   normalizeWorkspacePayload
 } from './workspace-types'
 import { initStoryStateSchema } from './story-state-store'
+import { commitGameEventsForFinalChapters, initGameProgressionSchema } from './game-progression-store'
 import { initAssistantRuntimeSchema } from './ai/runtime-v2/conversation-manager'
 import { initChapterProcessingSchema } from './ai/runtime/chapter-processing-store'
 import { initStateBackfillSchema } from './ai/state-backfill-store'
 import { migrateKnowledgeDocumentScopes } from './knowledge-document-schema'
+import { applyPendingWorkspaceRestore } from './workspace-backups'
 
 const WORKSPACE_DB = 'workspace.db'
 const WORKSPACE_FILE = 'workspace.json'
@@ -56,6 +58,12 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
   dbInitPromise = (async () => {
     try {
     await ensureWorkspaceDir()
+    try {
+      await applyPendingWorkspaceRestore(getWorkspaceDirPath())
+    } catch (error) {
+      // A damaged/missing backup must never prevent the current library from opening.
+      console.error('[workspace-backup] pending restore failed; keeping current database:', error)
+    }
     const db = new DatabaseSync(getWorkspaceDbPath())
     db.exec(`
     PRAGMA foreign_keys = ON;
@@ -64,6 +72,7 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       genre TEXT NOT NULL,
+      premise TEXT NOT NULL DEFAULT '',
       novel_length TEXT NOT NULL DEFAULT 'long',
       word_count TEXT NOT NULL,
       last_edited TEXT NOT NULL,
@@ -418,11 +427,14 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
   ensureWorkflowDocumentColumns(db)
   ensureKnowledgeDocumentSchema(db)
   initStoryStateSchema(db)
+  initGameProgressionSchema(db)
   initAssistantRuntimeSchema(db)
   initChapterProcessingSchema(db)
   initStateBackfillSchema(db)
 
   await migrateLegacyWorkspaceFile(db)
+  // 封面生成原图不再属于工作区数据；清掉旧版曾写入数据库的 Base64 历史。
+  db.exec('DELETE FROM cover_workbench_history;')
   workspaceDb = db
   return db
     } catch (err) {
@@ -687,6 +699,10 @@ function ensureProjectColumns(db: DatabaseSync): void {
   const columns = db.prepare(`PRAGMA table_info('projects')`).all() as Array<{ name: string }>
   const columnNames = new Set(columns.map((column) => column.name))
 
+  if (!columnNames.has('premise')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN premise TEXT NOT NULL DEFAULT '';`)
+  }
+
   if (!columnNames.has('novel_length')) {
     db.exec(`ALTER TABLE projects ADD COLUMN novel_length TEXT NOT NULL DEFAULT 'long';`)
   }
@@ -753,7 +769,7 @@ async function migrateLegacyWorkspaceFile(db: DatabaseSync): Promise<void> {
 
 export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null {
   const projectRows = db.prepare(`
-    SELECT id, title, genre, novel_length AS novelLength, word_count AS wordCount, last_edited AS lastEdited, cover,
+    SELECT id, title, genre, premise, novel_length AS novelLength, word_count AS wordCount, last_edited AS lastEdited, cover,
       target_platform AS targetPlatform,
       cover_history_json AS coverHistoryJson,
       writing_style_preset_id AS writingStylePresetId,
@@ -1422,11 +1438,12 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
     }
 
     const insertProject = db.prepare(`
-      INSERT INTO projects (id, title, genre, novel_length, word_count, last_edited, cover, target_platform, cover_history_json, reference_works_json, style_fingerprint_binding_json, writing_style_preset_id, writing_style_prompt, novel_workflow_stages_json, project_skills_json, skill_policy_json, skill_preset_bindings_json, chapter_assistant_templates_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO projects (id, title, genre, premise, novel_length, word_count, last_edited, cover, target_platform, cover_history_json, reference_works_json, style_fingerprint_binding_json, writing_style_preset_id, writing_style_prompt, novel_workflow_stages_json, project_skills_json, skill_policy_json, skill_preset_bindings_json, chapter_assistant_templates_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         genre = excluded.genre,
+        premise = excluded.premise,
         novel_length = excluded.novel_length,
         word_count = excluded.word_count,
         last_edited = excluded.last_edited,
@@ -1449,6 +1466,7 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
         project.id,
         project.title,
         project.genre,
+        project.premise,
         project.novelLength,
         project.wordCount,
         project.lastEdited,
@@ -1952,6 +1970,7 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
       if (orphaned) deleteEmbedding.run(row.id)
     }
 
+    commitGameEventsForFinalChapters(db)
     db.exec('COMMIT')
   } catch (error) {
     db.exec('ROLLBACK')

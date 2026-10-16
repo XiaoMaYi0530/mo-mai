@@ -13,6 +13,7 @@ import {
   Library,
   ListTodo,
   LoaderCircle,
+  Maximize2,
   Sparkles,
   Square,
   X
@@ -132,6 +133,11 @@ function handleCancel(run: AiTaskRun): void {
   appStore.cancelAiTask(run.key)
 }
 
+function handleOpen(run: AiTaskRun): void {
+  run.onOpen?.()
+  panelOpen.value = false
+}
+
 function handleDismiss(run: AiTaskRun): void {
   appStore.dismissAiTask(run.key)
 }
@@ -212,6 +218,16 @@ function handleDismiss(run: AiTaskRun): void {
 
             <div class="task-item-actions">
               <button
+                v-if="run.onOpen"
+                type="button"
+                class="task-open"
+                title="恢复任务窗口"
+                @click="handleOpen(run)"
+              >
+                <Maximize2 :size="11" />
+                <span>恢复</span>
+              </button>
+              <button
                 v-if="run.stage === 'running' && run.onCancel"
                 type="button"
                 class="task-stop"
@@ -222,7 +238,7 @@ function handleDismiss(run: AiTaskRun): void {
                 <span>停止</span>
               </button>
               <button
-                v-else-if="run.stage !== 'running'"
+                v-if="run.stage !== 'running'"
                 type="button"
                 class="task-dismiss"
                 title="移除任务记录"
@@ -296,6 +312,7 @@ function handleDismiss(run: AiTaskRun): void {
 
 .task-center-trigger:focus-visible,
 .panel-close:focus-visible,
+.task-open:focus-visible,
 .task-stop:focus-visible,
 .task-dismiss:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--arc-primary) 55%, transparent);
@@ -508,8 +525,10 @@ function handleDismiss(run: AiTaskRun): void {
   display: flex;
   min-height: 26px;
   align-items: center;
+  gap: 5px;
 }
 
+.task-open,
 .task-stop {
   display: inline-flex;
   height: 24px;
@@ -522,6 +541,12 @@ function handleDismiss(run: AiTaskRun): void {
   color: var(--arc-text-secondary);
   cursor: pointer;
   font-size: 10px;
+}
+
+.task-open:hover {
+  border-color: color-mix(in srgb, var(--arc-primary) 38%, var(--arc-border));
+  background: color-mix(in srgb, var(--arc-primary) 5%, var(--arc-bg-surface));
+  color: var(--arc-primary);
 }
 
 .task-stop:hover {

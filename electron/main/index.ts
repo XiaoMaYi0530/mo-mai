@@ -24,7 +24,9 @@ import {
   mergeAppSettingsIntoWorkspaceSnapshot,
   normalizeWorkspacePayload
 } from './workspace-types'
-import { ensureWorkspaceDb, getWorkspaceDbIfInitialized, readWorkspaceSnapshot, writeAppSettingsRow, writeWorkspaceSnapshot } from './workspace-store'
+import { ensureWorkspaceDb, getWorkspaceDbIfInitialized, getWorkspaceDirPath, readWorkspaceSnapshot, writeAppSettingsRow, writeWorkspaceSnapshot } from './workspace-store'
+import { createWorkspaceBackup } from './workspace-backups'
+import { WorkspaceRevisionGuard } from './workspace-revision'
 
 const APP_DATA_DIR_NAME = 'CharacterArc'
 
@@ -65,6 +67,7 @@ type WorkspaceAiRunEventPayload = {
 }
 
 let latestWorkspaceSnapshot: WorkspacePayload | null = null
+const workspaceRevision = new WorkspaceRevisionGuard()
 
 const windowManager = createWindowManager()
 
@@ -576,6 +579,7 @@ registerMainIpcHandlers({
   setLatestWorkspaceSnapshot: (payload) => {
     updateLatestWorkspaceSnapshot(payload as WorkspacePayload | null)
   },
+  workspaceRevision,
   setLatestAppSettings: (settings, metadata) => {
     updateLatestAppSettings(settings as Partial<WorkspacePayload['appSettings']>, metadata)
   },
@@ -615,9 +619,15 @@ bootstrapAssistantRuntime({
     const db = await ensureWorkspaceDb()
     const snapshot = readWorkspaceSnapshot(db)
     if (!snapshot) return
-    updateLatestWorkspaceSnapshot(snapshot)
-    windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', snapshot)
-  }
+    void createWorkspaceBackup(db, getWorkspaceDirPath()).catch((error) => {
+      console.warn('[workspace-backup] automatic backup failed:', error)
+    })
+    const current = workspaceRevision.advance(snapshot)
+    updateLatestWorkspaceSnapshot(current)
+    windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', current)
+  },
+  beginCommit: () => workspaceRevision.beginMutation(),
+  endCommit: () => workspaceRevision.endMutation()
 })
 
 // ── 应用生命周期 ──
@@ -635,7 +645,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   const db = getWorkspaceDbIfInitialized()
-  if (!db || !latestWorkspaceSnapshot) {
+  if (!db || !latestWorkspaceSnapshot || workspaceRevision.isMutationInProgress) {
     return
   }
 

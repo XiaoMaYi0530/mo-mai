@@ -91,6 +91,7 @@ const draftSettings = reactive<AppSettings>({
   darkModeStyle: 'nord',
   aiTimeoutSeconds: 180
 })
+const isCodexImageMode = computed(() => draftSettings.imageProvider === 'codex-cli-local')
 const draftTheme = ref<ThemeName>('ocean')
 const editingProfileId = ref<string>('')
 const draggedMenuId = ref<WorkbenchMenuId | null>(null)
@@ -839,10 +840,10 @@ async function saveSettings(): Promise<void> {
                   clearable
                   @update:value="(value) => handleImageProviderChange(value ?? '')"
                 />
-                <span class="preset-hint">切换预设仅更新模型名和 Base URL，API Key 不会被覆盖。</span>
+                <span class="preset-hint">{{ isCodexImageMode ? '复用本机 Codex CLI 登录，无需图片模型、地址和 API Key。' : '切换预设仅更新模型名和 Base URL，API Key 不会被覆盖。' }}</span>
               </div>
             </n-form-item>
-            <n-form-item label="图片模型名称">
+            <n-form-item v-if="!isCodexImageMode" label="图片模型名称">
               <div class="model-input-row">
                 <n-select
                   v-if="fetchedImageModels.length > 0"
@@ -873,7 +874,7 @@ async function saveSettings(): Promise<void> {
               </div>
             </n-form-item>
           </div>
-          <div class="settings-grid">
+          <div v-if="!isCodexImageMode" class="settings-grid">
             <n-form-item label="图片 Base URL">
               <n-input
                 :value="draftSettings.imageBaseUrl"
@@ -891,6 +892,7 @@ async function saveSettings(): Promise<void> {
               />
             </n-form-item>
           </div>
+          <p v-else class="preset-hint">请先在终端执行 codex login。封面工作台会在隔离临时目录中调用本机 Codex CLI 生图；费用或额度按 CLI 当前登录方式计算。</p>
         </section>
 
         <section id="sec-theme" class="settings-section">

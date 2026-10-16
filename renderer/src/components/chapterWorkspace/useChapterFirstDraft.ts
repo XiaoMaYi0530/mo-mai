@@ -323,7 +323,7 @@ type StreamTaskResult = {
   result?: unknown
 }
 
-export function useChapterFirstDraft(): {
+function createChapterFirstDraft(): {
   isGenerating: Ref<boolean>
   isStopping: Ref<boolean>
   modalVisible: Ref<boolean>
@@ -342,6 +342,8 @@ export function useChapterFirstDraft(): {
   start: (config: FirstDraftConfig, options?: FirstDraftRunOptions) => Promise<boolean>
   stop: () => Promise<void>
   closeModal: () => void
+  minimizeModal: () => void
+  openModal: () => void
   registerStreamListener: () => void
   unregisterStreamListener: () => void
 } {
@@ -661,6 +663,11 @@ export function useChapterFirstDraft(): {
     recompute()
     let finalLabel = '本次 AI 初稿流程已完成'
     let completed = false
+    const gameRunId = `first-draft-${crypto.randomUUID()}`
+    // Once the generated draft and its checkpoint are durable, its staged game
+    // events are part of that resumable draft. A later audit/polish failure must
+    // not erase them while leaving the checkpointed prose intact.
+    let preserveGameRunOnFailure = false
 
     try {
       await appStore.runTrackedAiTask(
@@ -670,7 +677,14 @@ export function useChapterFirstDraft(): {
           label: 'AI 生成章节初稿',
           description: `正在生成《${chapter.title}》初稿`,
           panel: 'chapters',
-          onCancel: () => { void stop() }
+          onCancel: () => { void stop() },
+          onOpen: options.showModal === false
+            ? undefined
+            : () => {
+                appStore.openProject(project.id)
+                appStore.openChapterStudio(chapter.id)
+                modalVisible.value = true
+              }
         },
         async () => {
           const targetWordCount = activeTargetWordCount.value
@@ -693,6 +707,7 @@ export function useChapterFirstDraft(): {
           const skippedSteps = new Set<FirstDraftStepId>(resumedCheckpoint?.skippedSteps ?? [])
           let chapterMemo: ChapterFirstDraftContextInput['chapterMemo'] | undefined = resumedCheckpoint?.chapterMemo
           let checkpointText = resumedCheckpoint?.currentText ?? ''
+          preserveGameRunOnFailure = completedSteps.has('draft') && Boolean(checkpointText)
           let latestAuditResult: ChapterAuditPayload | null = resumedCheckpoint?.auditResult ?? null
           let auditedText: string | null = resumedCheckpoint?.completedSteps.includes('audit')
             && !resumedCheckpoint.completedSteps.includes('repair')
@@ -968,6 +983,7 @@ export function useChapterFirstDraft(): {
 
           const context = {
             ...writingPacket,
+            gameRunId,
             userPrompt: appendStepPrompt(`请生成这一章的完整初稿，目标字数为 ${targetWordCount} 字，这是本次生成的硬约束；请在完成剧情的同时主动控制篇幅。如果当前正文为空，就从零起稿；如果当前正文不为空，也按整章重写处理，而不是续写。${config.userPrompt ? `\n\n补充要求：${config.userPrompt}` : ''}`, steps.draft.userPrompt),
             ...draftSkillContext,
             chapterMemo
@@ -1000,6 +1016,7 @@ export function useChapterFirstDraft(): {
             checkpointText = fullText
             completedSteps.add('draft')
             await saveCheckpoint()
+            preserveGameRunOnFailure = true
           } else {
             streamingContent.value = fullText
             streamingCharCount.value = fullText.length
@@ -1276,6 +1293,9 @@ export function useChapterFirstDraft(): {
         }
       )
     } catch (error) {
+      if (!preserveGameRunOnFailure) {
+        await window.characterArc.gameRollbackAiRun({ projectId: project.id, aiRunId: gameRunId })
+      }
       const isCanceled = error instanceof Error && error.message === 'canceled'
       if (isCanceled) {
         finalLabel = '本次 AI 初稿流程已停止'
@@ -1285,6 +1305,7 @@ export function useChapterFirstDraft(): {
       throw error
     } finally {
       reset(finalLabel)
+      unregisterStreamListener()
     }
     return completed
   }
@@ -1311,6 +1332,14 @@ export function useChapterFirstDraft(): {
     previewContent.value = ''
   }
 
+  function minimizeModal(): void {
+    modalVisible.value = false
+  }
+
+  function openModal(): void {
+    modalVisible.value = true
+  }
+
   return {
     isGenerating,
     isStopping,
@@ -1330,7 +1359,22 @@ export function useChapterFirstDraft(): {
     start,
     stop,
     closeModal,
+    minimizeModal,
+    openModal,
     registerStreamListener,
     unregisterStreamListener
   }
+}
+
+type ChapterFirstDraftController = ReturnType<typeof createChapterFirstDraft>
+let sharedChapterFirstDraft: ChapterFirstDraftController | null = null
+
+/**
+ * 初稿执行器在渲染进程内保持单例，使页面切换后任务、流监听和恢复窗口入口仍指向同一轮生成。
+ */
+export function useChapterFirstDraft(): ChapterFirstDraftController {
+  if (!sharedChapterFirstDraft) {
+    sharedChapterFirstDraft = createChapterFirstDraft()
+  }
+  return sharedChapterFirstDraft
 }

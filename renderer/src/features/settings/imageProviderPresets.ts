@@ -8,14 +8,21 @@ export interface ImageProviderPreset {
 
 export const imageProviderPresets: ImageProviderPreset[] = [
   {
-    label: 'GPT-Image-2 (OpenAI)',
+    label: 'Codex CLI（本机登录）',
+    value: 'codex-cli-local',
+    model: '',
+    baseUrl: '',
+    hint: '复用本机 Codex CLI 的登录状态生成封面，不需要图片 API Key；费用或额度按 CLI 当前登录方式计算。'
+  },
+  {
+    label: 'GPT-Image-1 (OpenAI)',
     value: 'gpt-image-openai',
     model: 'gpt-image-1',
     baseUrl: 'https://api.openai.com/v1',
     hint: 'OpenAI 官方图片生成接口，支持 gpt-image-1。需要 OpenAI API Key。'
   },
   {
-    label: 'GPT-Image-2 (云雾 AI)',
+    label: 'GPT-Image-1 (云雾 AI)',
     value: 'gpt-image-yunwu',
     model: 'gpt-image-1',
     baseUrl: 'https://yunwu.ai/v1',

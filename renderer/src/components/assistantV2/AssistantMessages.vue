@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ReadEvidencePanel from './ReadEvidencePanel.vue'
 import { computed, nextTick, onActivated, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -653,6 +654,7 @@ const hasContent = computed(() => props.messages.length > 0)
       </div>
       </div>
 
+      <ReadEvidencePanel :calls="msg.toolCalls" />
       <div v-if="msg.error" class="error-block">
         <CircleAlert :size="15" />
         <div>

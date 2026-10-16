@@ -1,7 +1,8 @@
-import { BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { DatabaseSync } from 'node:sqlite'
 import * as XLSX from 'xlsx'
 
@@ -23,6 +24,8 @@ import { fetchQidianRank } from './qidian-rank'
 import { fetchQimaoTrends } from './qimao-trends'
 import { fetchZonghengTrends } from './zongheng-trends'
 import { getWorkspaceDirPath } from './workspace-store'
+import { createWorkspaceBackup, listWorkspaceBackups, stageWorkspaceRestore } from './workspace-backups'
+import { registerGameProgressionIpc } from './game-progression-ipc'
 import { inspectContinuationNovelFile } from './continuation-import'
 import {
   exportProjectArchive,
@@ -127,6 +130,7 @@ function compareVersions(a: string, b: string): number {
 
 type RegisterMainIpcHandlersDeps = {
   windowManager: WindowManager
+  workspaceRevision: import('./workspace-revision').WorkspaceRevisionGuard
   setLatestWorkspaceSnapshot: (payload: unknown) => void
   setLatestAppSettings: (
     settings: unknown,
@@ -193,6 +197,7 @@ async function cleanupOrphanReferenceNovelFiles(payload: unknown): Promise<void>
 }
 
 export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void {
+  registerGameProgressionIpc({ ensureWorkspaceDb: deps.ensureWorkspaceDb, getActiveWindow: () => deps.windowManager.getActiveWindow() })
   ipcMain.handle('characterarc:export-json', async (_event, payload: unknown) => {
     const window = deps.windowManager.getActiveWindow()
     if (!window) {
@@ -315,8 +320,9 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       const db = await deps.ensureWorkspaceDb()
       const workspace = deps.readWorkspaceSnapshot(db)
       if (workspace) {
-        deps.setLatestWorkspaceSnapshot(workspace)
-        deps.windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', workspace)
+        const current = deps.workspaceRevision.advance(workspace as object)
+        deps.setLatestWorkspaceSnapshot(current)
+        deps.windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', current)
       }
       sendProgress({ phase: 'done', message: '导入完成', percent: 100 })
       return { success: true, canceled: false, selectedProjectId: result.selectedProjectId }
@@ -678,6 +684,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       success: true,
       canceled: false,
       filePath,
+      coverUrl: pathToFileURL(filePath).href,
       dataUrl: `data:${mime};base64,${bytes.toString('base64')}`
     }
   })
@@ -746,6 +753,36 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       success: true,
       canceled: false,
       filePath: result.filePath
+    }
+  })
+
+  ipcMain.handle('characterarc:install-project-cover', async (_event, payload: unknown) => {
+    const request = payload as { dataUrl?: string; projectId?: string }
+    const dataUrl = String(request?.dataUrl ?? '').trim()
+    const projectId = String(request?.projectId ?? '').trim()
+    if (!dataUrl || !projectId) {
+      return { success: false, error: '缺少封面图片或作品信息。' }
+    }
+
+    const match = dataUrl.match(/^data:image\/(\w+);base64,(.+)$/)
+    if (!match) {
+      return { success: false, error: '封面数据格式无效，无法设为作品封面。' }
+    }
+
+    const ext = match[1] === 'jpeg' ? 'jpg' : match[1]
+    const safeProjectId = projectId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80) || 'project'
+    const coverDir = join(getWorkspaceDirPath(), 'project-covers')
+    await mkdir(coverDir, { recursive: true })
+    const filePath = join(coverDir, `${safeProjectId}-${Date.now()}.${ext}`)
+    await writeFile(filePath, Buffer.from(match[2], 'base64'))
+    const existingCovers = await readdir(coverDir)
+    await Promise.all(existingCovers
+      .filter((name) => name.startsWith(`${safeProjectId}-`) && join(coverDir, name) !== filePath)
+      .map((name) => unlink(join(coverDir, name)).catch(() => {})))
+    return {
+      success: true,
+      filePath,
+      coverUrl: pathToFileURL(filePath).href
     }
   })
 
@@ -1280,10 +1317,12 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
   })
 
   ipcMain.handle('characterarc:workspace-sync-publish', (event, payload: unknown) => {
-    if (payload && typeof payload === 'object') {
-      deps.setLatestWorkspaceSnapshot(deps.normalizeWorkspacePayload(payload))
+    if (!deps.workspaceRevision.accepts(payload)) {
+      return { success: false, error: '工作区已更新，旧窗口的同步已拒绝；请先刷新工作区。' }
     }
-    deps.windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', payload, event.sender.id)
+    const current = deps.workspaceRevision.stamp(deps.normalizeWorkspacePayload(payload) as object)
+    deps.setLatestWorkspaceSnapshot(current)
+    deps.windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', current, event.sender.id)
     return { success: true }
   })
 
@@ -1296,12 +1335,13 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
         return { success: false, payload: null }
       }
 
-      deps.setLatestWorkspaceSnapshot(workspace)
+      const current = deps.workspaceRevision.stamp(workspace as object)
+      deps.setLatestWorkspaceSnapshot(current)
       nativeTheme.themeSource = (workspace as { appSettings?: { darkMode?: boolean } }).appSettings?.darkMode ? 'dark' : 'light'
 
       return {
         success: true,
-        payload: workspace
+        payload: current
       }
     } catch (error) {
       console.error('[workspace] loadWorkspace failed:', error)
@@ -1310,6 +1350,35 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
         payload: null,
         error: error instanceof Error ? error.message : 'Unknown workspace load error'
       }
+    }
+  })
+
+  ipcMain.handle('characterarc:list-workspace-backups', async () => {
+    try {
+      return { success: true, backups: await listWorkspaceBackups(getWorkspaceDirPath()) }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '读取备份失败' }
+    }
+  })
+
+  ipcMain.handle('characterarc:create-workspace-backup', async () => {
+    try {
+      const db = await deps.ensureWorkspaceDb()
+      const backup = await createWorkspaceBackup(db, getWorkspaceDirPath(), true)
+      return { success: true, backup }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '创建备份失败' }
+    }
+  })
+
+  ipcMain.handle('characterarc:restore-workspace-backup', async (_event, name: unknown) => {
+    try {
+      if (typeof name !== 'string') throw new Error('备份名无效')
+      await stageWorkspaceRestore(getWorkspaceDirPath(), name)
+      setTimeout(() => { app.relaunch(); app.quit() }, 350)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '恢复备份失败' }
     }
   })
 
@@ -1358,16 +1427,24 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
   ipcMain.handle('characterarc:save-workspace', async (_event, payload: unknown) => {
     try {
       const db = await deps.ensureWorkspaceDb()
+      if (!deps.workspaceRevision.accepts(payload)) {
+        return { success: false, error: '工作区已被其他窗口或 AI 写回更新，本次旧快照未保存，以免覆盖新内容。请刷新工作区后重试。' }
+      }
       const normalized = deps.normalizeWorkspacePayload(payload)
       deps.writeWorkspaceSnapshot(db, normalized)
-      deps.setLatestWorkspaceSnapshot(normalized)
+      void createWorkspaceBackup(db, getWorkspaceDirPath()).catch((error) => {
+        console.warn('[workspace-backup] automatic backup failed:', error)
+      })
+      const current = deps.workspaceRevision.advance(normalized as object)
+      deps.setLatestWorkspaceSnapshot(current)
+      deps.windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', current, _event.sender.id)
       nativeTheme.themeSource = (normalized as { appSettings?: { darkMode?: boolean } }).appSettings?.darkMode ? 'dark' : 'light'
 
       cleanupOrphanReferenceNovelFiles(normalized).catch((error) => {
         console.warn('[workspace] reference-novels cleanup failed:', error)
       })
 
-      return { success: true }
+      return { success: true, revision: deps.workspaceRevision.currentRevision }
     } catch (error) {
       console.error('[workspace] saveWorkspace failed:', error)
       return {
@@ -1383,11 +1460,19 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       if (!db) {
         throw new Error('工作区数据库尚未初始化')
       }
+      if (!deps.workspaceRevision.accepts(payload)) {
+        event.returnValue = { success: false, error: '工作区已更新，旧快照未保存，以免覆盖新内容。' }
+        return
+      }
       const normalized = deps.normalizeWorkspacePayload(payload)
       deps.writeWorkspaceSnapshot(db, normalized)
-      deps.setLatestWorkspaceSnapshot(normalized)
-      deps.windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', normalized, event.sender.id)
-      event.returnValue = { success: true }
+      void createWorkspaceBackup(db, getWorkspaceDirPath()).catch((error) => {
+        console.warn('[workspace-backup] automatic backup failed:', error)
+      })
+      const current = deps.workspaceRevision.advance(normalized as object)
+      deps.setLatestWorkspaceSnapshot(current)
+      deps.windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', current, event.sender.id)
+      event.returnValue = { success: true, revision: deps.workspaceRevision.currentRevision }
     } catch (error) {
       console.error('[workspace] saveWorkspaceSync failed:', error)
       event.returnValue = {

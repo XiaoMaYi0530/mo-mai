@@ -62,6 +62,18 @@ test('修改大纲时同时暴露大纲节点与分卷暂存工具', () => {
   assert.ok(selected.includes('stage_outline_volume'))
 })
 
+test('设计第三卷时只开放大纲相关暂存工具', () => {
+  const selected = selectToolsForTurn(tools, {
+    surface,
+    intent: 'entity-edit',
+    userMessage: '请设计第三卷的详细剧情'
+  }).map((tool) => tool.definition.name)
+
+  assert.ok(selected.includes('stage_outline'))
+  assert.ok(selected.includes('stage_outline_volume'))
+  assert.ok(!selected.includes('stage_character'))
+})
+
 test('模糊追问继承大纲阶段后仍暴露大纲暂存工具', () => {
   const selected = selectToolsForTurn(tools, {
     surface,
@@ -73,4 +85,16 @@ test('模糊追问继承大纲阶段后仍暴露大纲暂存工具', () => {
   assert.ok(selected.includes('stage_outline'))
   assert.ok(selected.includes('stage_outline_volume'))
   assert.ok(!selected.includes('stage_chapter_create'))
+})
+
+test('拆分后续章节时即使继承大纲阶段，也暴露章节工具而非大纲新增工具', () => {
+  const selected = selectToolsForTurn(tools, {
+    surface,
+    intent: 'edit',
+    userMessage: '确认了，你继续拆分后续章节吧',
+    skillStageId: 'outline'
+  }).map((tool) => tool.definition.name)
+
+  assert.ok(selected.includes('stage_chapter_create'))
+  assert.ok(!selected.includes('stage_outline'))
 })

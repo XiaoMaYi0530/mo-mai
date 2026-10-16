@@ -20,7 +20,7 @@ function stringList(value: unknown): string[] {
 const handler: TaskHandler = {
   name: 'reference-project-blueprint',
   outputType: 'json',
-  defaultCapabilities: ['settings', 'analysis', 'worldview', 'outline', 'writing-style'],
+  defaultCapabilities: ['settings', 'analysis', 'worldview', 'outline'],
   buildPrompt(input: PromptBuildInput) {
     const { context, capabilityPreamble } = input
     const projectPremise = String(context.projectPremise ?? '').trim()
@@ -32,6 +32,17 @@ const handler: TaskHandler = {
       : []
     const volumeMode = context.projectVolumeMode === 'manual' ? 'manual' : 'auto'
     const manualVolumePlan = String(context.manualVolumePlan ?? '').trim()
+    const referenceSources = Array.isArray(context.referenceSources)
+      ? context.referenceSources.slice(0, 3).map((source) => {
+          const entry = source && typeof source === 'object' ? source as Record<string, unknown> : {}
+          return {
+            title: String(entry.title ?? '').slice(0, 100),
+            role: String(entry.role ?? '').slice(0, 30),
+            purpose: String(entry.purpose ?? '').slice(0, 30),
+            findings: String(entry.findings ?? '').slice(0, 5_000)
+          }
+        })
+      : []
     const volumeInstruction = volumeMode === 'manual'
       ? `采用手动分卷。严格保留用户给出的卷数和卷名，并据阶段目标补足递进关系：\n${manualVolumePlan}`
       : '采用自动分卷。根据主线阶段、地图或身份变化、核心冲突升级和阶段高潮自然划分，不要为了凑固定卷数机械切分。'
@@ -50,7 +61,8 @@ const handler: TaskHandler = {
 2. 不得按参考作品章节逐章一一对应。相对参考作品至少改变主角身份与核心欲望、冲突来源、世界规则、关键关系、高潮解法中的四项；但用户在锁定事实中明确的内容绝对不能为了凑变化而改动。
 3. 可以保留的只有抽象功能，例如“受辱后获得主动权”“阶段胜利引出更大代价”，不能保留具体表达。
 4. transformationNotes 必须明确说明完成了哪些结构变换，供用户审阅相似性风险。
-5. 禁止擅自改名、换能力、替换世界规则或另造核心矛盾；未出现在锁定事实中的细节才允许补全。`,
+5. 禁止擅自改名、换能力、替换世界规则或另造核心矛盾；未出现在锁定事实中的细节才允许补全。
+6. 主参考负责所指定的结构维度；辅助参考只补各自指定的维度。不要把不同参考作品的具体情节链、角色或设定拼成一个故事。`,
       user: `${capabilityPreamble.user}
 
 请基于下列拆书资料，为一个全新的小说项目生成可审阅骨架。
@@ -63,13 +75,13 @@ const handler: TaskHandler = {
 【用户已经选中的故事路线（必须据此展开）】
 ${selectedConcept}
 
-参考作品：${String(context.referenceTitle ?? '')}
+主参考：${referenceSources[0]?.title ?? '未指定'}
 深度拆书覆盖率：${String(context.deepAnalysisCoverage ?? '未统计')}
 仍缺维度：${Array.isArray(context.missingDeepAnalysisDimensions) ? context.missingDeepAnalysisDimensions.join('、') : '未提供'}
 分卷要求：${volumeInstruction}
 
 【已经抽象的拆书资料】
-${String(context.referenceStructure ?? '')}
+${JSON.stringify(referenceSources, null, 2)}
 
 输出要求：
 1. blueprintSummary：200-400 字，说明新故事核心卖点、主角目标、主要阻力与长线承诺。

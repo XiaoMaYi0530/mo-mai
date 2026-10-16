@@ -1,3 +1,4 @@
+import { transferOutlineNodes, undoOutlineTransfer, type OutlineTransferUndo } from '@/features/workspace/outlineTransfer'
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { FAST_PERSIST_DELAY_MS, formatAutoSaveIntervalLabel, isLiveAutoSaveInterval, resolveAutoSaveDelayMs } from '@/features/settings/autoSave'
@@ -55,6 +56,7 @@ import {
   applyExternalAiTaskEvent,
   restoreAiTaskRuns,
   serializeAiTaskRuns,
+  getAiTaskResultError,
   type AiTaskRun,
   type AiTaskRunInput
 } from '@/features/ai/taskRegistry'
@@ -110,6 +112,7 @@ interface ProjectWorkspacePayload {
   project: {
     title: string
     genre: string
+    premise?: string
     novelLength: NovelLength
     wordCount?: string
     cover?: string
@@ -215,8 +218,9 @@ export const useAppStore = defineStore('app', () => {
   const stored = loadStoredState()
   /** 是否已完成初始化水合（从 SQLite 加载数据） */
   const hasHydrated = ref(false)
+  const workspaceRevision = ref(0)
   /** 当前视图：项目列表 / 新建向导 / 工作台 / 章节写作 / 独立能力页 */
-  const currentView = ref<'projects' | 'wizard' | 'continuation-import' | 'workbench' | 'chapter-studio' | 'deconstruction-library' | 'skills' | 'cover-workbench' | 'fanqie-trends'>('projects')
+  const currentView = ref<'projects' | 'wizard' | 'continuation-import' | 'workbench' | 'chapter-studio' | 'deconstruction-library' | 'skills' | 'cover-workbench' | 'fanqie-trends' | 'equipment-generator'>('projects')
   const pendingWizardDraft = ref<{ title?: string; genre?: string; premise?: string } | null>(null)
   /** 工作台中当前激活的面板 */
   const activePanel = ref<PanelName>('outline')
@@ -254,13 +258,15 @@ export const useAppStore = defineStore('app', () => {
     scheduledPersistAt,
     isPersisting,
     persistenceError,
+    syncConflictNotice,
     scheduleWorkspaceSync,
     flushWorkspaceSync,
     persistWorkspace,
     persistAppSettings,
     schedulePersist,
     scheduleSettingsPersist,
-    handleRemoteWorkspaceSync
+    handleRemoteWorkspaceSync,
+    markWorkspaceLoaded
   } = createWorkspacePersistence({
     hasHydrated,
     serializeWorkspaceState: () => serializeWorkspaceState(),
@@ -269,7 +275,8 @@ export const useAppStore = defineStore('app', () => {
       selectedProjectId: selectedProjectId.value,
       appSettings: appSettings.value
     }),
-    applyRemoteState: (payload) => applyWorkspaceState(payload)
+    applyRemoteState: (payload) => applyWorkspaceState(payload),
+    setWorkspaceRevision: (revision) => { workspaceRevision.value = revision }
   })
 
   // ── 计算属性：从当前工作区派生各业务实体列表 ──
@@ -766,6 +773,10 @@ export const useAppStore = defineStore('app', () => {
       return
     }
 
+    if ('workspaceRevision' in payload && typeof payload.workspaceRevision === 'number') {
+      workspaceRevision.value = payload.workspaceRevision
+    }
+
     theme.value = payload.theme ?? 'ocean'
     projects.value = Array.isArray(payload.projects)
       ? payload.projects.map(normalizeProjectSummary)
@@ -788,7 +799,8 @@ export const useAppStore = defineStore('app', () => {
     }
 
     appSettings.value = normalizeAppSettings(payload.appSettings)
-    coverWorkbenchHistory.value = Array.isArray(payload.coverWorkbenchHistory) ? payload.coverWorkbenchHistory : []
+    // 封面原图只保留在本次工作台会话和本地文件，不再从数据库恢复 Base64 历史。
+    coverWorkbenchHistory.value = []
     allKnowledgeDocuments.value = Array.isArray((payload as Partial<StoredState>).knowledgeDocuments)
       ? (payload as Partial<StoredState>).knowledgeDocuments!.map((document) =>
           normalizeKnowledgeDocumentScope(document)
@@ -818,6 +830,7 @@ export const useAppStore = defineStore('app', () => {
   /** 将当前全局状态序列化为可持久化的 StoredState 对象 */
   function serializeWorkspaceState(): StoredState {
     return {
+      workspaceRevision: workspaceRevision.value,
       theme: theme.value,
       selectedProjectId: selectedProjectId.value,
       projects: toSerializable(projects.value),
@@ -826,7 +839,8 @@ export const useAppStore = defineStore('app', () => {
       referenceWorks: toSerializable(referenceWorks.value),
       aiRuns: toSerializable(globalAiRuns.value),
       appSettings: toSerializable(appSettings.value),
-      coverWorkbenchHistory: toSerializable(coverWorkbenchHistory.value)
+      // 旧字段保留为空用于兼容旧数据库，并让下次保存清理既有大图记录。
+      coverWorkbenchHistory: []
     }
   }
 
@@ -838,6 +852,7 @@ export const useAppStore = defineStore('app', () => {
     const result = await window.characterArc.loadWorkspace()
     if (result.success && result.payload) {
       applyWorkspaceState(result.payload as Partial<StoredState>)
+      markWorkspaceLoaded()
       persistenceError.value = null
     } else {
       const err = result.error ?? null
@@ -873,6 +888,7 @@ export const useAppStore = defineStore('app', () => {
       id: projectId,
       title: payload.project?.title?.trim() || '导入项目',
       genre: payload.project?.genre?.trim() || '未分类',
+      premise: payload.project?.premise?.trim() || '',
       novelLength: payload.project?.novelLength === 'short' ? 'short' : 'long',
       wordCount: formatProjectWordCount(importedWorkspace.chapters),
       lastEdited: createProjectEditedAt(),
@@ -1208,6 +1224,19 @@ export const useAppStore = defineStore('app', () => {
     schedulePersist('fast')
   }
 
+  /** 打开装备与技能库工具；默认沿用当前作品。 */
+  function openEquipmentGeneratorPage(projectId?: string): void {
+    const resolvedProjectId = String(projectId ?? selectedProjectId.value ?? '').trim()
+    const targetProject = projects.value.find((item) => item.id === resolvedProjectId) ?? projects.value[0]
+    if (targetProject) {
+      ensureProjectWorkspace(targetProject.id)
+      selectedProjectId.value = targetProject.id
+      syncSelectedChapter(targetProject.id)
+    }
+    currentView.value = 'equipment-generator'
+    schedulePersist('fast')
+  }
+
   /** 返回项目列表页 */
   function backToProjects(): void {
     currentView.value = 'projects'
@@ -1252,6 +1281,7 @@ export const useAppStore = defineStore('app', () => {
       id: projectId,
       title: payload.project.title,
       genre: payload.project.genre,
+      premise: payload.project.premise?.trim() || '',
       novelLength: payload.project.novelLength,
       wordCount: computedWordCount,
       lastEdited: createProjectEditedAt(),
@@ -1340,9 +1370,10 @@ export const useAppStore = defineStore('app', () => {
             ...project,
             title: payload.title?.trim() || project.title,
             genre: payload.genre?.trim() || project.genre,
+            premise: payload.premise !== undefined ? payload.premise.trim() : project.premise,
             novelLength: payload.novelLength !== undefined ? payload.novelLength : project.novelLength,
             lastEdited: payload.lastEdited?.trim() || createProjectEditedAt(),
-            cover: payload.cover || project.cover,
+            cover: payload.cover !== undefined ? payload.cover : project.cover,
             writingStylePresetId: payload.writingStylePresetId?.trim() || project.writingStylePresetId,
             writingStylePrompt:
               payload.writingStylePrompt !== undefined ? payload.writingStylePrompt.trim() : project.writingStylePrompt,
@@ -2659,9 +2690,15 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function deleteOutlineItem(outlineId: string): void {
+    deleteOutlineItems([outlineId])
+  }
+
+  function deleteOutlineItems(outlineIds: string[]): void {
+    if (!outlineIds.length) return
+    const ids = new Set(outlineIds)
     updateCurrentWorkspace((workspace) => ({
       ...workspace,
-      outlineItems: reindexOutlineItems(workspace.outlineItems.filter((item) => item.id !== outlineId))
+      outlineItems: reindexOutlineItems(workspace.outlineItems.filter((item) => !ids.has(item.id)))
     }))
     schedulePersist('fast')
   }
@@ -2704,25 +2741,28 @@ export const useAppStore = defineStore('app', () => {
     schedulePersist('fast')
   }
 
-  /** 将一个或多个大纲节点追加到指定分卷末尾 */
-  function moveOutlineItemsToVolumeEnd(outlineIds: string[], volumeId: string): void {
+  const lastOutlineMove = ref<{ projectId: string; undo: OutlineTransferUndo } | null>(null)
+  const canUndoOutlineMove = computed(() => lastOutlineMove.value?.projectId === selectedProjectId.value)
+  function moveOutlineItemsToVolumeEnd(outlineIds: string[], volumeId: string, withChapters = false): void {
     updateCurrentWorkspace((workspace) => {
-      const nextOutlineItems = reorderOutlineItemsToVolumeEnd(
-        workspace.outlineItems,
-        outlineIds,
-        volumeId,
-        workspace.outlineVolumes.map((volume) => volume.id)
-      )
-      if (nextOutlineItems === workspace.outlineItems) {
-        return workspace
-      }
-
-      return {
-        ...workspace,
-        outlineItems: reindexOutlineItems(nextOutlineItems)
-      }
+      const transfer = transferOutlineNodes(workspace, outlineIds, volumeId, withChapters)
+      lastOutlineMove.value = { projectId: selectedProjectId.value, undo: transfer.undo }
+      return transfer.workspace
     })
     schedulePersist('fast')
+  }
+  function undoLastOutlineMove(): boolean {
+    const record = lastOutlineMove.value
+    if (!record || record.projectId !== selectedProjectId.value) return false
+    let restored = false
+    updateCurrentWorkspace((workspace) => {
+      const next = undoOutlineTransfer(workspace, record.undo)
+      restored = Boolean(next)
+      return next ?? workspace
+    })
+    lastOutlineMove.value = null
+    if (restored) schedulePersist('fast')
+    return restored
   }
 
   /** 删除章节（至少保留一章），自动切换到相邻章节 */
@@ -3526,6 +3566,10 @@ export const useAppStore = defineStore('app', () => {
 
     try {
       const result = await executor()
+      const businessError = getAiTaskResultError(result)
+      if (businessError) {
+        throw new Error(businessError)
+      }
       finalizeAiTask(input.key, 'done')
       return result
     } catch (error) {
@@ -3705,6 +3749,7 @@ export const useAppStore = defineStore('app', () => {
     deleteOrganization,
     deleteOrganizationMembership,
     deleteOutlineItem,
+    deleteOutlineItems,
     deleteOutlineVolume,
     deletePlotThread,
     deleteProject,
@@ -3720,12 +3765,15 @@ export const useAppStore = defineStore('app', () => {
     moveOutlineItem,
     moveOutlineItems,
     moveOutlineItemsToVolumeEnd,
+    canUndoOutlineMove,
+    undoLastOutlineMove,
     moveOutlineVolume,
     openChapterStudio,
     openDeconstructionLibrary,
     openFanqieTrends,
     openProject,
     openCoverWorkbenchPage,
+    openEquipmentGeneratorPage,
     openContinuationImport,
     openSkillsPage,
     openWizard,
@@ -3808,6 +3856,7 @@ export const useAppStore = defineStore('app', () => {
     updateWorldviewEntry,
     worldviewEntries,
     persistenceError,
+    syncConflictNotice,
     clearAssistantFocusTarget,
     // ── AI 任务注册表 ──
     runningAiTasks,

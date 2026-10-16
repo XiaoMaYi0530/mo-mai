@@ -499,7 +499,7 @@ function openFingerprintDocument(asset: ReferenceAssetLibrary): void {
 
     <!-- Batch Import Modal -->
     <BatchImportModal />
-    <ReferenceProjectBlueprintModal v-model:show="blueprintVisible" :asset="blueprintAsset" />
+    <ReferenceProjectBlueprintModal v-model:show="blueprintVisible" :asset="blueprintAsset" :available-assets="referenceAssets" />
 
     <!-- Detail Modal -->
     <n-modal v-model:show="detailVisible">

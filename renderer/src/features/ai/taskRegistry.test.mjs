@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { applyExternalAiTaskEvent, restoreAiTaskRuns, serializeAiTaskRuns } from './taskRegistry.ts'
+import {
+  applyExternalAiTaskEvent,
+  getAiTaskResultError,
+  restoreAiTaskRuns,
+  serializeAiTaskRuns
+} from './taskRegistry.ts'
 
 function event(runId, stage) {
   return {
@@ -20,9 +25,17 @@ test('应用重启后把运行中任务恢复为可重试的中断记录', () =>
     key: 'deep', kind: 'reference', label: '深度拆书', startedAt, stage: 'running', onCancel: () => {}
   }]]))
   assert.doesNotMatch(serialized, /onCancel/)
+  assert.doesNotMatch(serialized, /onOpen/)
   const restored = restoreAiTaskRuns(serialized, 200)
   assert.equal(restored.get('deep')?.stage, 'error')
   assert.match(restored.get('deep')?.error ?? '', /中断/)
+})
+
+test('业务返回 success false 时任务必须判定失败', () => {
+  assert.equal(getAiTaskResultError({ success: true }), null)
+  assert.equal(getAiTaskResultError({ success: false, error: '图片生成失败' }), '图片生成失败')
+  assert.equal(getAiTaskResultError({ success: false }), 'AI 任务执行失败')
+  assert.equal(getAiTaskResultError('普通结果'), null)
 })
 
 test('主进程后台任务事件可从 running 收敛到 done', () => {

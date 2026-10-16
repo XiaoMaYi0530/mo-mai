@@ -67,6 +67,12 @@ function openCoverWorkbenchPage(): void {
   appStore.openCoverWorkbenchPage(targetProject?.id)
 }
 
+function openEquipmentGeneratorPage(): void {
+  const targetProject = appStore.projects.find((project) => project.id === appStore.selectedProjectId)
+    ?? appStore.projects[0]
+  appStore.openEquipmentGeneratorPage(targetProject?.id)
+}
+
 function openProjectEditor(project?: ProjectSummary): void {
   editingProject.value = project ?? null
   editorVisible.value = true
@@ -97,13 +103,13 @@ async function handlePickCover(): Promise<void> {
   }
 
   const result = await window.characterArc.pickCoverImage()
-  if (!result.success || result.canceled || !result.dataUrl) {
+  if (!result.success || result.canceled || (!result.coverUrl && !result.dataUrl)) {
     return
   }
 
   editingProject.value = {
     ...editingProject.value,
-    cover: result.dataUrl
+    cover: result.coverUrl ?? result.dataUrl ?? ''
   }
   message.success('项目封面已更新')
 }
@@ -112,6 +118,7 @@ function submitProject(payload: {
   id: string
   title: string
   genre: string
+  premise: string
   novelLength: ProjectSummary['novelLength']
   cover: string
   targetPlatform: string
@@ -119,6 +126,7 @@ function submitProject(payload: {
   appStore.updateProject(payload.id, {
     title: payload.title,
     genre: payload.genre,
+    premise: payload.premise,
     novelLength: payload.novelLength,
     cover: payload.cover,
     targetPlatform: payload.targetPlatform
@@ -159,6 +167,7 @@ function requestDeleteProject(projectId: string): void {
         @open-deconstruction="openDeconstructionLibrary"
         @open-fanqie-trends="appStore.openFanqieTrends()"
         @open-cover-workbench="openCoverWorkbenchPage"
+        @open-equipment-generator="openEquipmentGeneratorPage"
         @open-skills="openSkillsPage"
         @open-settings="settingsVisible = true"
         @open-announcement="announcementVisible = true"

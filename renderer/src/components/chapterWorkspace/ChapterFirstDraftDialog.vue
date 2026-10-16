@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { Minimize2 } from 'lucide-vue-next'
 import { NButton, NModal, NTag } from 'naive-ui'
 import type { ChapterAuditPayload } from './useChapterFirstDraft'
 import ChapterDraftStreamView from './ChapterDraftStreamView.vue'
@@ -23,6 +24,7 @@ const props = defineProps<{
 defineEmits<{
   stop: []
   close: []
+  minimize: []
 }>()
 
 const elapsedDisplay = computed(() => {
@@ -124,6 +126,16 @@ const auditSummary = computed(() => {
 
     <template #footer>
       <div class="actions">
+        <n-button
+          v-if="isGenerating"
+          round
+          strong
+          secondary
+          @click="$emit('minimize')"
+        >
+          <template #icon><Minimize2 :size="15" /></template>
+          最小化到 AI 后台
+        </n-button>
         <n-button
           v-if="isGenerating"
           round

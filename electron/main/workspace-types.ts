@@ -128,6 +128,8 @@ export type WorkflowDocumentKey =
   | 'resource_ledger'
 
 export type WorkspacePayload = {
+  /** 内存中的工作区修订号，用于防止旧窗口的全量保存覆盖 AI 刚写回的数据。 */
+  workspaceRevision?: number
   theme: string
   selectedProjectId: string
   knowledgeDocuments: WorkspaceKnowledgeDocument[]
@@ -138,6 +140,7 @@ export type WorkspacePayload = {
     id: string
     title: string
     genre: string
+    premise: string
     novelLength: 'short' | 'long'
     wordCount: string
     lastEdited: string
@@ -634,10 +637,13 @@ export function normalizeProjectRecord(
     id: project.id,
     title: project.title || '未命名作品',
     genre: project.genre || '未分类',
+    premise: typeof project.premise === 'string' ? project.premise.trim() : '',
     novelLength: project.novelLength === 'short' ? 'short' : 'long',
     wordCount: project.wordCount || '待统计',
     lastEdited: project.lastEdited || '',
-    cover: project.cover || 'linear-gradient(135deg, #d4fc79 0%, #96e6a1 100%)',
+    cover: project.cover !== undefined
+      ? String(project.cover)
+      : 'linear-gradient(135deg, #d4fc79 0%, #96e6a1 100%)',
     targetPlatform: project.targetPlatform || '',
     coverHistory: Array.isArray(project.coverHistory) ? project.coverHistory : [],
     writingStylePresetId: project.writingStylePresetId || 'cinematic-cool',

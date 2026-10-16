@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Archive, FileJson, FileStack, FileText, Lightbulb, Moon, Network, PenTool, Save, Upload, Users } from 'lucide-vue-next'
-import { NButton, NCard, NFormItem, NInput, NSelect, NSwitch, useMessage } from 'naive-ui'
+import { NButton, NCard, NFormItem, NInput, NSelect, NSwitch, useDialog, useMessage } from 'naive-ui'
 import { getPlainTextFromEditorContent } from '@/features/chapters/editorContent'
 import { autoSaveOptions } from '@/features/settings/autoSave'
 import { buildProjectWritingStyleContext, writingStylePresets } from '@/features/writingStyles/presets'
@@ -18,6 +18,65 @@ import type {
 
 const appStore = useAppStore()
 const message = useMessage()
+const dialog = useDialog()
+const backups = ref<Array<{ name: string; createdAt: string; sizeBytes: number; projectTitles: string[]; assetMode: 'complete' | 'database-only' }>>([])
+const selectedBackupName = ref('')
+const isManagingBackups = ref(false)
+
+async function refreshBackups(): Promise<void> {
+  const result = await window.characterArc.listWorkspaceBackups()
+  if (!result.success) {
+    message.error(result.error ?? '读取备份失败')
+    return
+  }
+  backups.value = result.backups ?? []
+  if (!backups.value.some((item) => item.name === selectedBackupName.value)) {
+    selectedBackupName.value = backups.value[0]?.name ?? ''
+  }
+}
+
+async function createBackupNow(): Promise<void> {
+  isManagingBackups.value = true
+  try {
+    await appStore.persistWorkspace()
+    if (appStore.persistenceError) throw new Error(appStore.persistenceError)
+    const result = await window.characterArc.createWorkspaceBackup()
+    if (!result.success) throw new Error(result.error ?? '备份失败')
+    await refreshBackups()
+    message.success('本地备份已创建')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '备份失败')
+  } finally {
+    isManagingBackups.value = false
+  }
+}
+
+function confirmRestoreBackup(): void {
+  const selected = backups.value.find((item) => item.name === selectedBackupName.value)
+  if (!selected) return
+  dialog.warning({
+    title: '恢复整个工作区？',
+    content: `将恢复到 ${new Date(selected.createdAt).toLocaleString('zh-CN')} 的全部作品和设置，并重启应用。${selected.assetMode === 'database-only' ? '这是旧版仅数据库备份，封面、参考原文与导入 Skill 不会恢复。' : '封面、参考原文与导入 Skill 也会同步恢复。'}当前状态会先另存为恢复前备份。`,
+    positiveText: '恢复并重启',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      isManagingBackups.value = true
+      try {
+        await appStore.persistWorkspace()
+        if (appStore.persistenceError) throw new Error(appStore.persistenceError)
+        const result = await window.characterArc.restoreWorkspaceBackup(selected.name)
+        if (!result.success) throw new Error(result.error ?? '恢复失败')
+        message.info('已安排恢复，应用正在重启')
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '恢复失败')
+      } finally {
+        isManagingBackups.value = false
+      }
+    }
+  })
+}
+
+onMounted(() => { void refreshBackups() })
 const archiveImportRef = ref<{
   pickArchive: () => Promise<void>
   isInspectingArchive: boolean
@@ -93,6 +152,11 @@ async function handleExportProjectArchive(): Promise<void> {
 
   isExportingArchive.value = true
   try {
+    await appStore.persistWorkspace()
+    if (appStore.persistenceError) {
+      message.error(`保存最新项目数据失败：${appStore.persistenceError}`)
+      return
+    }
     const result = await window.characterArc.exportProjectArchive({
       projectId: project.id,
       projectTitle: project.title
@@ -278,6 +342,29 @@ watch(
           <span>
             {{ appStore.persistenceError || '当前工作区内容已接入本地 SQLite 持久化。' }}
           </span>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-name">自动本地备份</div>
+            <div class="setting-hint">保存后每 12 小时最多生成一份，包含数据库、参考原文、作品封面与导入 Skill；保留最近 7 份，仅存放在本机。</div>
+          </div>
+          <n-button :loading="isManagingBackups" @click="createBackupNow">立即备份</n-button>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-name">恢复备份</div>
+            <div class="setting-hint">
+              {{ backups.find((item) => item.name === selectedBackupName)?.projectTitles.join('、') || '暂无可用备份' }}
+              <span v-if="backups.find((item) => item.name === selectedBackupName)?.assetMode === 'database-only'"> · 旧版仅数据库</span>
+            </div>
+          </div>
+          <n-select
+            v-model:value="selectedBackupName"
+            class="compact-select"
+            :options="backups.map((item) => ({ label: `${new Date(item.createdAt).toLocaleString('zh-CN')} · ${item.projectTitles.length} 部作品 · ${item.assetMode === 'complete' ? '完整' : '仅数据库'}`, value: item.name }))"
+            placeholder="选择备份"
+          />
+          <n-button :disabled="!selectedBackupName || isManagingBackups" @click="confirmRestoreBackup">预览并恢复</n-button>
         </div>
         <div class="setting-row">
           <div>

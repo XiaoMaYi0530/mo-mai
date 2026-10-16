@@ -28,6 +28,7 @@ const versions = computed<ChapterVersion[]>(() =>
 const selectedVersion = computed(() =>
   versions.value.find((version) => version.id === selectedVersionId.value) ?? versions.value[0] ?? null
 )
+const isSyncConflictVersion = (version: ChapterVersion): boolean => version.id.startsWith('sync-conflict-')
 
 type CompareRow = {
   id: string
@@ -182,6 +183,7 @@ watch(
           </div>
           <span class="version-title">{{ version.title }}</span>
           <div class="meta">
+            <span v-if="isSyncConflictVersion(version)" class="chip warning">同步冲突保留版</span>
             <span class="chip" :class="statusChipClass(version.status)">
               {{ STATUS_LABELS[version.status] ?? '草稿中' }}
             </span>
@@ -210,7 +212,7 @@ watch(
         </header>
 
         <div class="compare-labels">
-          <span>{{ formatTime(selectedVersion.createdAt) }} · 历史版本</span>
+          <span>{{ formatTime(selectedVersion.createdAt) }} · {{ isSyncConflictVersion(selectedVersion) ? '同步冲突保留版' : '历史版本' }}</span>
           <span>当前编辑稿</span>
         </div>
 

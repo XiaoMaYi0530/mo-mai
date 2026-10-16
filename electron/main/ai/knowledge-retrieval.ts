@@ -13,6 +13,7 @@ import type { AiTaskPayload, AppSettings } from './shared-types'
 import { buildStoryStateContext, formatStoryStateForPrompt } from '../story-state-store'
 import { embedText, cosineSimilarity, embedTexts, providerSupportsEmbedding } from './embedding-service'
 import { ensureWorkspaceDb } from '../workspace-store'
+import { buildGameWritingContext } from '../game-progression-store'
 import { filterProjectKnowledgeDocuments } from './knowledge-document-scope'
 
 // ─────────────────────────────────────────────────────────────
@@ -305,7 +306,8 @@ export async function retrieveHybridContext(
 
   const involvedCharIds = extractCharacterIds(task.context)
   const storyState = buildStoryStateContext(db, projectId, involvedCharIds)
-  const storyStateBlock = formatStoryStateForPrompt(storyState)
+  const gameBlock = buildGameWritingContext(db, projectId, String(task.context.chapterId ?? ''), involvedCharIds)
+  const storyStateBlock = [formatStoryStateForPrompt(storyState), gameBlock].filter(Boolean).join('\n\n')
 
   let semanticSegments: HybridRetrievalResult['semanticSegments'] = []
   try {

@@ -84,3 +84,7 @@ ENV/
 .mypy_cache/
 .coverage
 htmlcov/
+
+# Versioned user documentation
+!docs/user-guide.md
+!docs/tutorial-maintenance.md

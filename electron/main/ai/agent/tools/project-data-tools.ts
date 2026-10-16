@@ -1,3 +1,5 @@
+import { encodeReadReceipt, type ProjectReadReceipt } from '../../../../shared/project-read-receipt.ts'
+import { characterReadBatches } from './project-read-tracking.ts'
 import { ensureWorkspaceDb } from '../../../workspace-store'
 import type { Tool, ToolHandlerResult } from './types'
 import { formatTextWindowNote, sliceTextWindow } from './text-window'
@@ -50,6 +52,8 @@ const ENTITY_TYPES: readonly EntityType[] = [
 const ENTITY_TYPE_SET = new Set<string>(ENTITY_TYPES)
 
 export function createProjectDataTools(): Tool[] {
+  // Per-turn factory; freeze the character list across a scheduled scan.
+  let scanBatches: ReturnType<typeof characterReadBatches> | null = null
   const readProjectData: Tool = {
     definition: {
       name: 'read_project_data',
@@ -62,6 +66,7 @@ export function createProjectDataTools(): Tool[] {
             enum: [...ENTITY_TYPES],
             description: 'The project data module to read. Omit to get an index.'
           },
+          scan_cursor: { type: 'integer', description: 'Internal full-character-review batch cursor. Returns a bounded segment batch with read receipt.' },
           entity_id: {
             type: 'string',
             description: 'Optional. Read a single entity by ID when supported.'
@@ -100,6 +105,17 @@ export function createProjectDataTools(): Tool[] {
         }
 
         const entityType = typeof input.entity_type === 'string' ? input.entity_type.trim() : ''
+        if (entityType === 'characters' && typeof input.scan_cursor === 'number') {
+          const cursor = Math.max(0, Math.floor(input.scan_cursor))
+          if (!scanBatches || cursor === 0) {
+            const db = await ensureWorkspaceDb()
+            const rows = db.prepare('SELECT id, name, role, description FROM characters WHERE project_id = ? ORDER BY rowid').all(ctx.projectId) as unknown as import('./project-read-tracking').CharacterReadRow[]
+            scanBatches = characterReadBatches(rows)
+          }
+          const batch = scanBatches[cursor]
+          if (!batch) return err('人物读取游标已失效，请从头重新检查。')
+          return ok(encodeReadReceipt(batch.receipt, batch.body))
+        }
         const entityId = typeof input.entity_id === 'string' ? input.entity_id.trim() : ''
         const summaryOnly = input.summary_only === true
         const limit = typeof input.limit === 'number' && Number.isFinite(input.limit)
@@ -124,7 +140,7 @@ export function createProjectDataTools(): Tool[] {
           return err(`Unsupported entity_type: ${entityType}. Available: ${ENTITY_TYPES.join(', ')}`)
         }
 
-        return ok(await readEntities(ctx.projectId, {
+        const options: ReadEntitiesOptions = {
           type: entityType as EntityType,
           entityId,
           summaryOnly,
@@ -133,7 +149,10 @@ export function createProjectDataTools(): Tool[] {
           contentOffset,
           contentLimit,
           docKey
-        }))
+        }
+        const body = await readEntities(ctx.projectId, options)
+        const receipt = await projectReadReceipt(ctx.projectId, options)
+        return ok(receipt ? encodeReadReceipt(receipt, body) : body)
       } catch (error) {
         return err(error instanceof Error ? error.message : String(error))
       }
@@ -731,4 +750,28 @@ function truncateText(value: string, maxLength: number): string {
     return normalized
   }
   return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`
+}
+
+/** Same scoped rows as the reader. SQL identifiers come exclusively from this fixed catalogue. */
+async function projectReadReceipt(projectId: string, options: ReadEntitiesOptions): Promise<ProjectReadReceipt | null> {
+  const specs: Record<string, [string, string, string, string]> = {
+    characters: ['characters', 'name', 'description', 'rowid'], worldview: ['worldview_entries', 'title', 'content', 'sort_order'],
+    chapters: ['chapters', 'title', 'content', 'sort_order'], outline: ['outline_items', 'title', 'summary', 'sort_order'],
+    organizations: ['organizations', 'name', 'description', 'rowid']
+  }
+  const spec = specs[options.type]
+  if (!spec) return null
+  const [table, title, content, order] = spec
+  const db = await ensureWorkspaceDb()
+  const rows = db.prepare(`SELECT id, ${title} AS title, ${content} AS content FROM ${table} WHERE project_id = ? ORDER BY ${order}`).all(projectId) as Array<{ id: string; title: string; content: string }>
+  const resolved = options.type === 'outline' && options.entityId ? resolveOrderedEntity(rows, options.entityId) : undefined
+  const selected = options.entityId ? rows.filter(r => r.id === (resolved?.id ?? options.entityId)) : applyLimit(rows, options.limit, options.offset)
+  const summary = options.summaryOnly || (options.type === 'chapters' && !options.entityId)
+  return { module: options.type, total: rows.length, catalog: rows.map(({ id, title }) => ({ id, title })), items: selected.map(row => {
+    const text = options.type === 'chapters' ? stripHtml(row.content || '') : row.content || ''
+    const windowed = Boolean(options.entityId) && options.type !== 'outline'
+    const from = windowed ? Math.min(text.length, options.contentOffset) : 0
+    const to = windowed ? Math.min(text.length, from + (options.contentLimit ?? 15000)) : text.length
+    return { id: row.id, title: row.title, mode: summary ? 'summary' : from === 0 && to === text.length ? 'full' : 'partial', from, to, total: text.length }
+  }) }
 }

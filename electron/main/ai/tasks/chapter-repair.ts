@@ -133,6 +133,7 @@ const handler: TaskHandler = {
       context.referenceStyleContext ? `\n\n== 项目绑定风格指纹（只约束表达，不照搬内容） ==\n${String(context.referenceStyleContext)}` : '',
       Number.isFinite(targetWordCount) && targetWordCount > 0 ? `\n目标字数：${targetWordCount} 字` : '',
       Number.isFinite(measuredWordCount) && measuredWordCount > 0 ? `\n当前程序测量字数：${measuredWordCount} 字` : '',
+      context.gameProgressionBlock ? `\n\n== 游戏数值账本（精确事实，不得编造） ==\n${String(context.gameProgressionBlock)}` : '',
       `\n当前章节正文：\n${String(context.chapterContent ?? '')}`
     ]
 

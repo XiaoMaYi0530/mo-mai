@@ -65,7 +65,7 @@ function normalizeOptionalString(input: Record<string, unknown>, key: string): s
   return typeof input[key] === 'string' ? String(input[key]).trim() : ''
 }
 
-function formatSkillListEntry(skill: SkillDefinition, enabled: boolean): string {
+function formatSkillListEntry(skill: SkillDefinition, enabled: boolean, allowed: boolean): string {
   const scope = skill.scope === 'builtin' ? '内置' : '项目'
   const enabledLabel = enabled ? '启用' : '停用'
   const desc = (skill.description || '暂无描述').replace(/\s+/g, ' ').trim()
@@ -74,6 +74,7 @@ function formatSkillListEntry(skill: SkillDefinition, enabled: boolean): string 
     `- ${skill.id}`,
     `名称：${skill.name}`,
     `状态：${enabledLabel}`,
+    `本轮：${allowed ? '可用' : '不可用'}`,
     `来源：${scope}（${skill.path}）`,
     `分类：${skill.manifest.category}`,
     `阶段：${stageIds}`,
@@ -100,7 +101,8 @@ export function createSkillTools(opts: SkillToolFactoryOptions): Tool[] {
     if (!skill) return { error: `skill 未找到：${skillId}` }
     const enabled = opts.resolveSkillEnabled?.(skill) ?? skill.enabled
     const allowed = opts.allowSkillUse?.(skill) ?? enabled
-    if (!enabled || !allowed) return { error: `当前执行策略不允许使用 skill：${skillId}` }
+    if (!enabled) return { error: `当前项目未启用 skill：${skillId}` }
+    if (!allowed) return { error: `当前执行策略不允许使用 skill：${skillId}` }
     return skill
   }
 
@@ -124,7 +126,10 @@ export function createSkillTools(opts: SkillToolFactoryOptions): Tool[] {
         const query = normalizeOptionalString(input, 'query').toLowerCase()
         const resolveEnabled = opts.resolveSkillEnabled ?? ((skill: SkillDefinition) => skill.enabled)
         const skills = (opts.listSkills?.() ?? [])
-          .map((skill) => ({ skill, enabled: resolveEnabled(skill) }))
+          .map((skill) => {
+            const enabled = resolveEnabled(skill)
+            return { skill, enabled, allowed: enabled && (opts.allowSkillUse?.(skill) ?? enabled) }
+          })
           .filter((entry) => !enabledOnly || entry.enabled)
           .filter((entry) => scope === 'builtin' || scope === 'project' ? entry.skill.scope === scope : true)
           .filter((entry) => {
@@ -152,7 +157,7 @@ export function createSkillTools(opts: SkillToolFactoryOptions): Tool[] {
         return ok([
           `已识别 skills：${total} 个；本次返回：${skills.length} 个；其中启用：${enabledCount} 个，内置：${builtinCount} 个，项目扩展：${projectCount} 个。`,
           '',
-          ...skills.map((entry) => formatSkillListEntry(entry.skill, entry.enabled))
+          ...skills.map((entry) => formatSkillListEntry(entry.skill, entry.enabled, entry.allowed))
         ].join('\n'))
       } catch (error) {
         return err(error instanceof Error ? error.message : String(error))

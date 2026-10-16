@@ -57,11 +57,11 @@ function buildSurfaceHint(surface: SurfaceDefinition): string {
         '- 章节：正文用 stage_chapter_edit；标题、摘要、状态、字数目标、分卷和大纲绑定用 stage_chapter_update；版本先用 list_chapter_versions 查看，再用 stage_chapter_restore 暂存恢复。',
         '- 项目基础资料：stage_project_metadata。知识中心普通文档用 stage_knowledge_document；项目硬约束仍用 stage_constraint。',
         '- 大纲同步规则：修改 summary 时必须同时重新判断 conflict。根据新剧情更新；确认仍适用时传回原值；没有明确冲突时传空字符串清空。不得遗留与新剧情无关的旧冲突。',
-        '创建大纲用 stage_outline(create)，必须先调用 list_outline_volumes，并把目标分卷的 ID 显式填入 volume_id；禁止省略 volume_id 或假定第一个分卷。新增或修改大纲时，根据剧情中明确涉及的已有实体填写 related_character_ids、related_organization_ids、related_worldview_ids，不要把名称当成 ID。生成初稿既可用 stage_chapter_create(带 content) 新建带稿章节，也可对已有空章节用 stage_chapter_edit(replace) 写入。按某个大纲节点生成新章节时，必须把该大纲节点的 entity_id 填入 stage_chapter_create 的 outline_item_id。'
+        '创建大纲用 stage_outline(create)，必须先调用 list_outline_volumes，并把目标分卷的 ID 显式填入 volume_id；禁止省略 volume_id 或假定第一个分卷。新增或修改大纲时，根据剧情中明确涉及的已有实体填写 related_character_ids、related_organization_ids、related_worldview_ids，不要把名称当成 ID。生成初稿既可用 stage_chapter_create(带 content) 新建带稿章节，也可对已有空章节用 stage_chapter_edit(replace) 写入。按某个大纲节点生成新章节时，必须把该大纲节点的 entity_id 填入 stage_chapter_create 的 outline_item_id。拆分章节时创建的是 chapter，不是 outline；多个章节可以绑定同一现有大纲，不能以缺少一章一节点的大纲为由拒绝建章。'
       ].join('\n')
     case 'chapter-panel':
       return [
-        '【当前场景】章节创作助手。用户正在编辑某个章节。你的动手范围主要是当前章节的正文修改（stage_chapter_edit）；其他项目资料默认只读。若用户明确要求新增、修改或删除世界观设定，可使用 stage_worldview 产出待审阅的暂存变更，不要直接写库。',
+        '【当前场景】章节创作助手。用户正在编辑某个章节。你的动手范围主要是当前章节的正文修改（stage_chapter_edit）；其他项目资料默认只读。若用户明确要求新增、修改或删除世界观设定，可使用 stage_worldview 产出待审阅的暂存变更，不要直接写库。若本作品启用了游戏数值账本，涉及升级、加点、换装、学习技能、称号或特殊物品时须先调用 read_game_state 核对，再用 stage_game_change 将明确要求的变化暂存到当前章节；绝不发明目录外的装备、技能和加成。数值暂存需由作者在“数值”页确认，不等于章节正文已写回。',
         '',
         '【技能使用】上下文中提供了可用技能列表（skill-index）。有适用技能时，优先用 skill_load 加载技能，按技能指导操作，效果通常优于直接凭经验改写。常用技能示例：润色类、节奏类、风格迁移类、降低AI感等。',
         '',

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useMessage } from 'naive-ui'
+import { NModal, useMessage } from 'naive-ui'
 import {
   History,
+  Swords,
   MessageSquareText,
   Plus,
   Sparkles,
@@ -17,8 +18,8 @@ import AssistantSessionList from '@/components/assistantV2/AssistantSessionList.
 import AssistantMessages from '@/components/assistantV2/AssistantMessages.vue'
 import AssistantComposer from '@/components/assistantV2/AssistantComposer.vue'
 import StagedChangesView from '@/components/assistantV2/StagedChangesView.vue'
-import ChapterFirstDraftDialog from './ChapterFirstDraftDialog.vue'
 import { type useChapterFirstDraft, type FirstDraftConfig } from './useChapterFirstDraft'
+import GameProgressionPanel from './GameProgressionPanel.vue'
 
 const props = defineProps<{
   /** 由父级 ChapterWorkspace 持有的 assistant 实例，避免 v-if 销毁时丢失暂存状态 */
@@ -44,10 +45,11 @@ const composerValue = computed({
   set: (value) => { assistant.composerValue.value = value }
 })
 
-type PanelTab = 'chat' | 'staged' | 'sessions'
+type PanelTab = 'chat' | 'staged' | 'sessions' | 'game'
 type ChapterMode = 'chat' | 'diagnose' | 'polish'
 
 const activeTab = ref<PanelTab>('chat')
+const gameExpanded = ref(false)
 const activeMode = ref<ChapterMode>('chat')
 const isCommitting = ref(false)
 
@@ -297,9 +299,17 @@ defineExpose({ sendPrompt, sendPromptWithAction, triggerDraft })
         <History :size="14" />
         历史
       </button>
+      <button type="button" :class="{ active: activeTab === 'game' }" @click="activeTab = 'game'">
+        <Swords :size="14" />
+        数值
+      </button>
     </nav>
 
-    <div v-if="activeTab === 'sessions'" class="sessions-pane">
+    <div v-if="activeTab === 'game'" class="game-pane">
+      <button class="game-expand" @click="gameExpanded = true">展开数值管理</button>
+      <GameProgressionPanel v-if="!gameExpanded" />
+    </div>
+    <div v-else-if="activeTab === 'sessions'" class="sessions-pane">
       <AssistantSessionList
         :sessions="assistant.sessions.value"
         :active-session-id="assistant.activeSessionId.value"
@@ -408,33 +418,20 @@ defineExpose({ sendPrompt, sendPromptWithAction, triggerDraft })
       />
     </div>
 
+    <n-modal v-model:show="gameExpanded" preset="card" title="游戏数值管理" style="width: min(1200px, 94vw); max-height: 90vh; overflow-y: auto">
+      <GameProgressionPanel v-if="gameExpanded" />
+    </n-modal>
     <footer v-if="activeTab !== 'chat' && acceptedCount > 0" class="dock-foot">
       <button type="button" @click="activeTab = 'staged'">
         {{ acceptedCount }} 项已确认，待写回
       </button>
     </footer>
 
-    <ChapterFirstDraftDialog
-      :show="draft.modalVisible.value"
-      :is-generating="draft.isGenerating.value"
-      :is-stopping="draft.isStopping.value"
-      :is-auditing="draft.isAuditing.value"
-      :is-streaming="draft.isStreaming.value"
-      :execution-label="draft.executionLabel.value"
-      :reasoning-content="draft.reasoningContent.value"
-      :preview-title="draft.previewTitle.value"
-      :preview-content="draft.previewContent.value"
-      :progress-percent="draft.progressPercent.value"
-      :progress-text="draft.progressText.value"
-      :audit-result="draft.auditResult.value"
-      :elapsed-seconds="draft.elapsedSeconds.value"
-      @stop="async () => { try { await draft.stop() } catch (e) { message.error(e instanceof Error ? e.message : '停止失败') } }"
-      @close="draft.closeModal()"
-    />
   </section>
 </template>
 
 <style scoped>
+.game-pane{min-height:0;overflow:auto;flex:1}.game-expand{margin:12px;padding:8px 12px;cursor:pointer;border:1px solid var(--arc-border);border-radius:6px;background:var(--arc-bg-surface);color:var(--arc-primary)}
 .v2-dock {
   --arc-primary: #0d7d5a;
   --arc-primary-hover: #0a6b4e;
@@ -572,7 +569,7 @@ defineExpose({ sendPrompt, sendPromptWithAction, triggerDraft })
 
 .dock-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   flex-shrink: 0;
   gap: 4px;
   padding: 8px 10px;

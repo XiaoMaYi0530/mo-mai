@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
-import { Copy, Download, History, ImagePlus, Sparkles, Wand2 } from 'lucide-vue-next'
+import { computed, reactive, ref, watch } from 'vue'
+import { Check, Copy, Download, History, ImagePlus, Sparkles, Wand2 } from 'lucide-vue-next'
 import {
   NAlert,
   NButton,
@@ -38,7 +38,6 @@ const genreSelectOptions = PROJECT_GENRE_OPTIONS
   .map((o) => ({ label: o.label, value: o.label }))
 
 const workbench = reactive({
-  bookTitle: '',
   genre: '',
   targetPlatform: '',
   authorName: '',
@@ -49,8 +48,28 @@ const generatedPrompt = ref<CoverPromptWorkbenchResult | null>(null)
 const generatedPromptFingerprint = ref('')
 const AI_COVER_TASK_KEY = 'cover-generate'
 const isGeneratingImage = computed(() => appStore.isAiTaskRunning(AI_COVER_TASK_KEY))
+const isCodexImageMode = computed(() => appStore.appSettings.imageProvider === 'codex-cli-local')
 const revisedPrompt = ref('')
 const previewCoverUrl = ref('')
+const sessionHistory = ref<CoverWorkbenchHistoryItem[]>([])
+const selectedProjectId = ref(appStore.selectedProjectId || appStore.projects[0]?.id || '')
+const selectedProject = computed(() =>
+  appStore.projects.find((project) => project.id === selectedProjectId.value) ?? null
+)
+const projectSelectOptions = computed(() => appStore.projects.map((project) => ({
+  label: project.title,
+  value: project.id
+})))
+
+watch(selectedProjectId, () => {
+  const project = selectedProject.value
+  if (!project) return
+  workbench.genre = project.genre
+  workbench.targetPlatform = project.targetPlatform
+  generatedPrompt.value = null
+  generatedPromptFingerprint.value = ''
+  revisedPrompt.value = ''
+}, { immediate: true })
 
 const resolvedImageConfig = computed(() => ({
   model: appStore.appSettings.imageModel.trim(),
@@ -59,11 +78,15 @@ const resolvedImageConfig = computed(() => ({
 }))
 
 const imageConfigReady = computed(() => {
+  if (isCodexImageMode.value) return true
   const config = resolvedImageConfig.value
   return !!(config.model && config.baseUrl && config.apiKey)
 })
 
 const imageConfigSummary = computed(() => {
+  if (isCodexImageMode.value) {
+    return '使用本机 Codex CLI 登录生成封面，无需图片 API Key。请先确认已在终端执行 codex login；费用或额度按 CLI 当前登录方式计算。'
+  }
   const config = resolvedImageConfig.value
   if (!config.model || !config.baseUrl || !config.apiKey) {
     return '尚未配置专用图片生成接口，请先到主页设置中填写图片模型、Base URL 和 API Key。'
@@ -80,28 +103,15 @@ const isPromptStale = computed(() => {
 })
 
 function createWorkbenchInput(): CoverPromptWorkbenchInput | null {
+  const project = selectedProject.value
+  if (!project) return null
   return {
     project: {
-      id: '',
-      title: workbench.bookTitle.trim(),
+      ...project,
       genre: workbench.genre.trim(),
-      targetPlatform: workbench.targetPlatform.trim(),
-      novelLength: 'long',
-      wordCount: '',
-      lastEdited: '',
-      cover: '',
-      writingStylePresetId: '',
-      writingStylePrompt: '',
-      chapterAssistantTemplates: [],
-      novelWorkflowStages: [],
-      projectSkills: [],
-      skillPolicy: { mode: 'auto', skillIds: [] },
-      skillPresetBindings: {},
-      selectedReferenceWorkIds: [],
-      styleFingerprintBinding: { version: 1, primaryReferenceWorkId: '', primaryWeight: 100, auxiliary: [] },
-      coverHistory: []
+      targetPlatform: workbench.targetPlatform.trim()
     },
-    referenceWorks: [],
+    referenceWorks: appStore.referenceWorks,
     authorName: workbench.authorName,
     extraNotes: workbench.extraNotes
   }
@@ -164,7 +174,6 @@ function generateCoverPrompt(): CoverPromptWorkbenchResult | null {
 }
 
 function reuseHistoryItem(item: CoverWorkbenchHistoryItem): void {
-  workbench.bookTitle = item.promptTitle.replace(/｜封面提示词$/, '')
   workbench.genre = item.genre
   workbench.targetPlatform = item.targetPlatform
   workbench.authorName = item.authorName
@@ -231,10 +240,10 @@ async function generateCoverImage(): Promise<void> {
     revisedPrompt.value = result.result.revisedPrompt?.trim() || ''
     previewCoverUrl.value = result.result.dataUrl
 
-    appStore.updateCoverWorkbenchHistory([
+    sessionHistory.value = [
       buildCoverWorkbenchHistoryItem(promptResult, result.result.dataUrl),
-      ...appStore.coverWorkbenchHistory
-    ].slice(0, 24))
+      ...sessionHistory.value
+    ].slice(0, 8)
 
     message.success('AI 封面已生成。')
   } catch (error) {
@@ -249,7 +258,7 @@ async function saveCoverToLocal(dataUrl?: string): Promise<void> {
     return
   }
   try {
-    const title = workbench.bookTitle.trim() || 'cover'
+    const title = selectedProject.value?.title.trim() || 'cover'
     const result = await window.characterArc.saveCoverImage({
       dataUrl: coverData,
       defaultFileName: `${title}-封面-${Date.now()}.png`
@@ -263,6 +272,37 @@ async function saveCoverToLocal(dataUrl?: string): Promise<void> {
     message.success(`封面已保存到：${result.filePath}`)
   } catch (error) {
     message.error(error instanceof Error ? error.message : '封面保存失败')
+  }
+}
+
+async function setAsProjectCover(dataUrl?: string): Promise<void> {
+  const project = selectedProject.value
+  const coverData = dataUrl || previewCoverUrl.value
+  if (!project) {
+    message.warning('请先选择一个现有作品。')
+    return
+  }
+  if (!coverData) {
+    message.warning('当前没有可设置的封面图片。')
+    return
+  }
+
+  try {
+    const result = await window.characterArc.installProjectCover({
+      dataUrl: coverData,
+      projectId: project.id
+    })
+    if (!result.success || !result.coverUrl) {
+      throw new Error(result.error ?? '设置作品封面失败')
+    }
+    appStore.updateProject(project.id, { cover: result.coverUrl })
+    await appStore.persistWorkspace()
+    if (appStore.persistenceError) {
+      throw new Error(appStore.persistenceError)
+    }
+    message.success(`已设为《${project.title}》封面，图片保存在本地。`)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '设置作品封面失败')
   }
 }
 
@@ -299,10 +339,12 @@ function formatDate(iso: string): string {
         </template>
 
         <n-form label-placement="top" :show-feedback="false">
-          <n-form-item label="书名" required>
-            <n-input
-              v-model:value="workbench.bookTitle"
-              placeholder="作品标题，将直接渲染在封面上"
+          <n-form-item label="选择作品" required>
+            <n-select
+              v-model:value="selectedProjectId"
+              :options="projectSelectOptions"
+              filterable
+              placeholder="选择现有作品"
             />
           </n-form-item>
           <n-form-item label="题材" required style="margin-top: 12px">
@@ -363,9 +405,9 @@ function formatDate(iso: string): string {
 
         <div class="config-section">
           <span class="cover-kicker">Config</span>
-          <strong class="config-title">图片接口状态</strong>
+          <strong class="config-title">生图渠道状态</strong>
           <n-alert
-            :type="imageConfigReady ? 'success' : 'warning'"
+            :type="isCodexImageMode ? 'info' : imageConfigReady ? 'success' : 'warning'"
             :show-icon="true"
             style="margin-top: 8px"
           >
@@ -446,6 +488,22 @@ function formatDate(iso: string): string {
             </template>
             当前没有可保存的封面图片
           </n-tooltip>
+          <n-tooltip trigger="hover" :disabled="!!previewCoverUrl && !!selectedProject">
+            <template #trigger>
+              <n-button
+                block
+                strong
+                secondary
+                type="success"
+                :disabled="!previewCoverUrl || !selectedProject"
+                @click="setAsProjectCover()"
+              >
+                <template #icon><Check :size="15" /></template>
+                一键设为当前作品封面
+              </n-button>
+            </template>
+            请先选择作品并生成封面图片
+          </n-tooltip>
         </n-space>
       </n-card>
 
@@ -511,7 +569,7 @@ function formatDate(iso: string): string {
           </template>
           <template #extra>
             <span style="color: var(--arc-text-secondary); font-size: 13px">
-              填写书名、题材和平台后点击「生成提示词」
+              选择作品、确认题材和平台后点击「生成提示词」
             </span>
           </template>
         </n-empty>
@@ -527,14 +585,14 @@ function formatDate(iso: string): string {
             <strong>本次生成记录</strong>
           </div>
           <n-tag size="small" round :bordered="false">
-            {{ appStore.coverWorkbenchHistory.length }} 条
+            {{ sessionHistory.length }} 条
           </n-tag>
         </div>
       </template>
 
-      <div v-if="appStore.coverWorkbenchHistory.length" class="history-list">
+      <div v-if="sessionHistory.length" class="history-list">
         <n-card
-          v-for="item in appStore.coverWorkbenchHistory"
+          v-for="item in sessionHistory"
           :key="item.id"
           class="history-row-card"
           :bordered="true"
@@ -591,6 +649,14 @@ function formatDate(iso: string): string {
                   </n-button>
                 </template>
                 保存到本地
+              </n-tooltip>
+              <n-tooltip v-if="isImageCover(item.cover)" trigger="hover">
+                <template #trigger>
+                  <n-button size="small" secondary circle type="success" @click="setAsProjectCover(item.cover)">
+                    <template #icon><Check :size="14" /></template>
+                  </n-button>
+                </template>
+                设为所选作品封面
               </n-tooltip>
             </div>
           </div>

@@ -1,15 +1,15 @@
 {
-  "version": 1,
-  "updatedAt": "2026-09-17",
+  "version": 2,
+  "updatedAt": "2026-10-16",
   "title": "墨脉使用教程",
   "intro": "从创建作品、配置 AI，到维护设定、生成大纲和进行章节创作，按这份教程即可快速熟悉墨脉。",
   "resources": [
     {
-      "id": "feishu-guide",
-      "type": "feishu",
-      "title": "飞书图文教程",
-      "description": "完整介绍项目创建、AI 接口配置、小说工作台、章节创作、全局助手、拆书工具、Skills 和项目备份。",
-      "url": "https://ecnnfa0ullkb.feishu.cn/wiki/CuMxwE8xwiZyIkkYDDfcdmpjnRe?from=from_copylink",
+      "id": "github-guide",
+      "type": "github",
+      "title": "墨脉使用教程图文版",
+      "description": "新版实机截图与操作步骤：配置 AI、创建作品、多本拆书参考、移动大纲、章节创作、游戏数值与备份。",
+      "url": "https://github.com/15810785091/mo-mai/blob/main/docs/user-guide.md",
       "enabled": true
     },
     {

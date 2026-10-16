@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import type { GameProjectData } from '../../shared/game-progression'
+import { commitGameEventsForFinalChapters, readGameProject, validateImportedGameProject } from '../game-progression-store'
 import type { DatabaseSync } from 'node:sqlite'
 import { Worker } from 'node:worker_threads'
 
@@ -42,6 +44,7 @@ export type ProjectArchiveModule =
   | 'plotThreads'
   | 'chapters'
   | 'storyState'
+  | 'gameProgression'
   | 'chapterVersions'
   | 'workflowDocuments'
   | 'knowledgeDocuments'
@@ -75,6 +78,7 @@ type ProjectArchiveContent = {
   workspace: ProjectWorkspace
   assistantV2: AssistantV2Archive
   storyState: ProjectStoryStateArchive | null
+  gameProgression: GameProjectData | null
   customSkills: ArchivedProjectSkill[]
   knowledgeDocuments: Array<WorkspaceKnowledgeDocument & { projectId?: string }>
   referenceWorks: WorkspaceReferenceWork[]
@@ -185,6 +189,7 @@ const ALL_ARCHIVE_MODULES: ProjectArchiveModule[] = [
   'plotThreads',
   'chapters',
   'storyState',
+  'gameProgression',
   'chapterVersions',
   'workflowDocuments',
   'knowledgeDocuments',
@@ -476,6 +481,7 @@ function buildManifest(
   workspace: ProjectWorkspace,
   assistantV2: AssistantV2Archive,
   storyState: ProjectStoryStateArchive,
+  gameProgression: GameProjectData | null,
   customSkills: ArchivedProjectSkill[],
   knowledgeDocuments: WorkspaceKnowledgeDocument[],
   referenceWorks: WorkspaceReferenceWork[],
@@ -500,6 +506,7 @@ function buildManifest(
       plotThreads: { count: workspace.plotThreads.length },
       chapters: { count: workspace.chapters.length },
       storyState: { count: countProjectStoryState(storyState) },
+      ...(gameProgression ? { gameProgression: { count: gameProgression.characters.length + gameProgression.assets.length + gameProgression.events.length } } : {}),
       customSkills: { count: customSkills.length },
       chapterVersions: { count: workspace.chapterVersions.length },
       workflowDocuments: {
@@ -553,6 +560,8 @@ export async function exportProjectArchive(options: ExportProjectArchiveOptions)
   ))]
   const assistantV2 = readAssistantV2Archive(options.db, project.id)
   const storyState = readProjectStoryState(options.db, project.id)
+  const gameData = readGameProject(options.db, project.id).data
+  const gameProgression = gameData.enabled || gameData.characters.length || gameData.assets.length ? gameData : null
   const customSkills = await collectProjectSkillsForArchive(
     dirname(getWorkspaceDirPath()), project.id, project.projectSkills ?? []
   )
@@ -568,7 +577,7 @@ export async function exportProjectArchive(options: ExportProjectArchiveOptions)
     assetCount++
   }
 
-  const manifest = buildManifest(project, workspace, assistantV2, storyState, customSkills, knowledgeDocuments, referenceWorks, assetCount)
+  const manifest = buildManifest(project, workspace, assistantV2, storyState, gameProgression, customSkills, knowledgeDocuments, referenceWorks, assetCount)
   addJson(zip, 'manifest.json', manifest)
   addJson(zip, 'project.json', project)
   addJson(zip, 'workspace/worldview.json', workspace.worldviewEntries)
@@ -588,6 +597,7 @@ export async function exportProjectArchive(options: ExportProjectArchiveOptions)
   addJson(zip, 'workspace/plotThreads.json', workspace.plotThreads)
   addJson(zip, 'workspace/chapters.json', workspace.chapters)
   addJson(zip, 'workspace/storyState.json', storyState)
+  if (gameProgression) addJson(zip, 'workspace/gameProgression.json', gameProgression)
   addJson(zip, 'workspace/customSkills.json', customSkills)
   addJson(zip, 'workspace/chapterVersions.json', workspace.chapterVersions)
   addJson(zip, 'workspace/workflowDocuments.json', workspace.workflowDocuments)
@@ -680,6 +690,7 @@ async function readArchiveContent(filePath: string): Promise<ProjectArchiveConte
     workspace,
     assistantV2: normalizeAssistantV2Archive(assistantPayload.assistantV2),
     storyState: await readZipJson<ProjectStoryStateArchive | null>(zip, 'workspace/storyState.json', null),
+    gameProgression: await readZipJson<GameProjectData | null>(zip, 'workspace/gameProgression.json', null),
     customSkills: await readZipJson<ArchivedProjectSkill[]>(zip, 'workspace/customSkills.json', []),
     knowledgeDocuments: await readZipJson(zip, 'workspace/knowledgeDocuments.json', []),
     referenceWorks: await readZipJson(zip, 'workspace/referenceWorks.json', []),
@@ -695,6 +706,7 @@ function expandModules(modules?: ProjectArchiveModule[]): Set<ProjectArchiveModu
   if (selected.has('workflowDocuments')) selected.add('outline')
   if (selected.has('referenceNovelAssets')) selected.add('referenceWorks')
   if (selected.has('aiRuns')) selected.add('knowledgeDocuments')
+  if (selected.has('gameProgression')) selected.add('characters').add('chapters')
   return selected
 }
 
@@ -913,6 +925,19 @@ function remapArchiveContent(
     }
   }
   const assistantV2 = remapAssistantV2Archive(content.assistantV2, targetProjectId, idMap, modules)
+  const gameProgression = modules.has('gameProgression') && content.gameProgression
+    ? {
+        ...content.gameProgression,
+        ruleVersions: content.gameProgression.ruleVersions?.map(version => ({ ...version, effectiveChapterId: mapId(idMap, version.effectiveChapterId) })),
+        characters: content.gameProgression.characters.map((character) => ({ ...character, characterId: mapId(idMap, character.characterId) })),
+        events: content.gameProgression.events.map((event) => ({
+          ...event,
+          id: idWithPrefix('game-event'),
+          characterId: mapId(idMap, event.characterId),
+          chapterId: mapId(idMap, event.chapterId)
+        }))
+      }
+    : null
 
   return {
     content: {
@@ -920,6 +945,7 @@ function remapArchiveContent(
       project,
       workspace,
       assistantV2,
+      gameProgression,
       knowledgeDocuments,
       referenceWorks,
       referenceNovelAssets: assets
@@ -1013,6 +1039,9 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
   const sourceContent = await readArchiveContent(options.filePath)
   if (modules.has('project')) validateArchivedProjectSkills(sourceContent.customSkills)
   validateStoryStateModuleSelection(modules, sourceContent.storyState !== null)
+  if (modules.has('gameProgression') && sourceContent.gameProgression && (!modules.has('characters') || !modules.has('chapters'))) {
+    throw new Error('导入游戏数值需同时导入角色与章节，以保持事件引用一致。')
+  }
   const targetProjectId =
     options.mode === 'new-project'
       ? idWithPrefix('project')
@@ -1051,6 +1080,7 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
           ? {
               title: incoming.project.title,
               genre: incoming.project.genre,
+              premise: incoming.project.premise,
               novelLength: incoming.project.novelLength,
               cover: incoming.project.cover,
               targetPlatform: incoming.project.targetPlatform,
@@ -1111,6 +1141,13 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
       modules.has('storyState') ? incoming.storyState ?? {} : {},
       idMap
     )
+  }
+  if (modules.has('gameProgression') && incoming.gameProgression) {
+    const validGame = validateImportedGameProject(options.db, targetProjectId, incoming.gameProgression)
+    options.db.prepare(`INSERT INTO game_progression (project_id, revision, data_json) VALUES (?, 1, ?)
+      ON CONFLICT(project_id) DO UPDATE SET revision = game_progression.revision + 1, data_json = excluded.data_json`)
+      .run(targetProjectId, JSON.stringify(validGame))
+    commitGameEventsForFinalChapters(options.db)
   }
   if (modules.has('assistantSessions')) {
     options.onProgress?.({ phase: 'assistant', message: '正在恢复助手会话...', percent: 84 })

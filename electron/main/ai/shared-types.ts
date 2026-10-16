@@ -46,6 +46,8 @@ export type AppSettings = {
   frequencyPenalty?: number
   /** 可选：embedding 专用模型，为空时从 model 推断 */
   embeddingModel: string
+  /** 封面生图渠道；codex-cli-local 复用本机 Codex CLI 登录 */
+  imageProvider?: string
   /** 可选：图片生成模型 */
   imageModel: string
   /** 可选：图片生成独立 API Key */
@@ -71,6 +73,7 @@ export type AiTaskName =
   | 'style-fingerprint-extract'
   | 'story-concept-options'
   | 'reference-project-blueprint'
+  | 'reference-blueprint-revise'
   | 'workflow-documents'
   | 'assistant-intent'
   | 'assistant-action-proposal'
@@ -85,6 +88,7 @@ export type AiTaskName =
   | 'chapter-humanize'
   | 'plot-thread-detect'
   | 'project-bootstrap'
+  | 'premise-dialog'
   | 'premise-enhance'
   | 'spiral-seed'
   | 'spiral-expand'
@@ -371,6 +375,21 @@ export type ReferenceProjectBlueprintResult = {
   }>
 }
 
+/** 对拆书骨架的局部对话修改，客户端审阅后才应用。 */
+export type ReferenceBlueprintRevisionResult = {
+  reply: string
+  edits: Array<{
+    target: 'volume' | 'node' | 'chapter'
+    action: 'update' | 'insert' | 'delete'
+    volumeIndex: number
+    nodeIndex?: number
+    chapterIndex?: number
+    title?: string
+    conflict?: string
+    summary?: string
+  }>
+}
+
 /** 创建小说前的创意发散结果。候选路线必须共享用户已经锁定的原创事实。 */
 export type StoryConceptOptionsResult = {
   lockedFacts: string[]
@@ -392,6 +411,14 @@ export type StoryConceptOptionsResult = {
 /** 小说创建向导中的简介优化结果 */
 export type PremiseEnhanceResult = {
   premise: string
+}
+
+/** 新建作品向导里通过短对话收束出的故事简介。 */
+export type PremiseDialogResult = {
+  reply: string
+  questions: string[]
+  premise: string
+  ready: boolean
 }
 
 /**
@@ -608,6 +635,8 @@ export type AiTaskResult =
   | ProjectBootstrapResult
   | StoryConceptOptionsResult
   | ReferenceProjectBlueprintResult
+  | ReferenceBlueprintRevisionResult
+  | PremiseDialogResult
   | PremiseEnhanceResult
   | WorkflowDocumentsResult
   | WorkflowStageDocumentsResult

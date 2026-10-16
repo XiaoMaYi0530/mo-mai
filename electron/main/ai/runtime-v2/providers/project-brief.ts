@@ -26,6 +26,7 @@ export function makeProjectBriefProvider(
       const lines: string[] = []
       lines.push(`- 标题：${project.title}`)
       if (project.genre) lines.push(`- 题材：${project.genre}`)
+      if (project.premise) lines.push(`- 故事定位：${project.premise.slice(0, 1200)}`)
       if (project.wordCount) lines.push(`- 字数目标：${project.wordCount}`)
       if (project.targetPlatform) lines.push(`- 目标平台：${project.targetPlatform}`)
       if (project.writingStylePrompt) {

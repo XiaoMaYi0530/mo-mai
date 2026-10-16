@@ -16,10 +16,12 @@ import { ensureWorkspaceDb } from '../workspace-store'
 import { runSpiralBootstrap } from './spiral'
 import type { SpiralBootstrapInput } from './spiral'
 import { formatAiErrorMessage } from './error-message'
+import { generateImageViaCodexCli } from './codex-image'
 import { testProxyConnection } from './proxy-fetch'
 import { isCodexCliProvider } from '@shared/ai-provider-catalog'
 import type { WorkspacePayload } from '../workspace-types'
 import { prepareAiExecution } from './runtime/execution-kernel'
+import { clearAiDraftEventsForChapter, rollbackAiGameRun } from '../game-progression-store'
 
 /**
  * AI IPC 模块的外部依赖注入接口。
@@ -55,6 +57,29 @@ type BackfillTaskRecord = {
   snapshot: BackfillTaskSnapshot
 }
 const backfillTasks = new Map<string, BackfillTaskRecord>()
+
+function gameRunScope(payload: AiTaskPayload): { projectId: string; chapterId: string } | null {
+  const projectId = String(payload.context?.projectId ?? '').trim()
+  const chapterId = String(payload.context?.chapterId ?? '').trim()
+  return projectId && chapterId ? { projectId, chapterId } : null
+}
+
+async function rollbackGameRun(payload: AiTaskPayload, runId: string): Promise<void> {
+  const scope = gameRunScope(payload)
+  if (!scope) return
+  try { rollbackAiGameRun(await ensureWorkspaceDb(), scope.projectId, runId) } catch { /* best-effort cleanup */ }
+}
+
+function resolveGameRunId(payload: AiTaskPayload, fallback: string): string {
+  return String(payload.context?.gameRunId ?? '').trim() || fallback
+}
+
+async function prepareFreshFirstDraftGameRun(payload: AiTaskPayload): Promise<void> {
+  if (payload.task !== 'chapter-first-draft') return
+  const scope = gameRunScope(payload)
+  if (!scope) return
+  try { clearAiDraftEventsForChapter(await ensureWorkspaceDb(), scope.projectId, scope.chapterId) } catch { /* ordinary projects have no game row */ }
+}
 
 function isActiveBackfillTask(snapshot: BackfillTaskSnapshot): boolean {
   return snapshot.status === 'running' || snapshot.status === 'pausing' || snapshot.status === 'paused'
@@ -150,6 +175,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
         try {
           if (shouldTryAgent) {
             try {
+              await prepareFreshFirstDraftGameRun(payload)
               const result = await runStreamingAgentTask(
                 payload,
                 {
@@ -191,7 +217,8 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
                   }
                 },
                 controller.signal,
-                knowledgeContext
+                knowledgeContext,
+                resolveGameRunId(payload, streamId)
               )
               deps!.emitAiRunEvent({ projectId: result.meta.projectId ?? '', meta: { id: randomUUID(), ...result.meta } })
               if (!event.sender.isDestroyed()) {
@@ -204,6 +231,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
               }
               return
             } catch (agentError) {
+              await rollbackGameRun(payload, resolveGameRunId(payload, streamId))
               if (!isToolUseNotSupportedError(agentError)) throw agentError
               streamedContent = ''
             }
@@ -237,6 +265,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
             })
           }
         } catch (error) {
+          await rollbackGameRun(payload, resolveGameRunId(payload, streamId))
           const aiRunMeta = error && typeof error === 'object' && 'aiRunMeta' in error
             ? (error as { aiRunMeta?: Record<string, unknown> }).aiRunMeta : undefined
           if (aiRunMeta) {
@@ -329,7 +358,8 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
                   }
                 },
                 controller.signal,
-                knowledgeContext
+                knowledgeContext,
+                resolveGameRunId(payload, streamId)
               )
               deps!.emitAiRunEvent({ projectId: result.meta.projectId ?? '', meta: { id: randomUUID(), ...result.meta } })
               if (!event.sender.isDestroyed()) {
@@ -337,6 +367,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
               }
               return
             } catch (agentError) {
+              await rollbackGameRun(payload, resolveGameRunId(payload, streamId))
               if (!isToolUseNotSupportedError(agentError)) throw agentError
               streamedContent = ''
             }
@@ -370,6 +401,7 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
             })
           }
         } catch (error) {
+          await rollbackGameRun(payload, resolveGameRunId(payload, streamId))
           if (!event.sender.isDestroyed()) {
             event.sender.send('characterarc:ai-stream-event', controller.signal.aborted
               ? { streamId, type: 'canceled', content: streamedContent }
@@ -431,14 +463,19 @@ export function registerAiIpcHandlers(injectedDeps: AiIpcDeps): void {
     const projectId = String(request?.projectId ?? '').trim()
     const settings = request?.settings as AppSettings
     const startedAt = new Date().toISOString()
+    const useCodexCli = settings?.imageProvider === 'codex-cli-local'
     // 运行记录里展示图片模型（封面专用模型与文本模型分开配置）。
-    const metaSettings = { ...settings, model: settings?.imageModel?.trim() || settings?.model } as AppSettings
+    const metaSettings = useCodexCli
+      ? { ...settings, provider: 'codex-cli', model: 'imagegen（本机）' } as AppSettings
+      : { ...settings, model: settings?.imageModel?.trim() || settings?.model } as AppSettings
     try {
       const prompt = String(request?.prompt ?? '').trim()
       if (!prompt) {
         throw new Error('图片生成提示词不能为空。')
       }
-      const result = await generateImage(settings, prompt)
+      const result = useCodexCli
+        ? await generateImageViaCodexCli(settings, prompt)
+        : await generateImage(settings, prompt)
 
       const meta = buildRunMeta(
         'cover-generate', projectId ?? '', undefined, metaSettings, 'success',

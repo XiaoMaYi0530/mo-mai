@@ -43,6 +43,8 @@ export interface AiTaskRun {
   }
   /** 可取消令牌：提供时，进度面板会显示"停止"按钮。 */
   onCancel?: () => void
+  /** 恢复入口：提供时，任务中心可重新打开原任务窗口。 */
+  onOpen?: () => void
   /** 主进程后台任务的运行版本，用于忽略上一轮迟到的终态事件。 */
   runId?: string
 }
@@ -74,6 +76,7 @@ export interface AiTaskRunInput {
   description?: string
   panel?: string
   onCancel?: () => void
+  onOpen?: () => void
 }
 
 /**
@@ -83,11 +86,25 @@ export interface AiTaskRunInput {
 export const AI_TASK_RETENTION_MS = 4_500
 export const AI_TASK_STORAGE_KEY = 'characterarc:recoverable-ai-tasks:v1'
 
-type PersistedAiTaskRun = Omit<AiTaskRun, 'onCancel'>
+type PersistedAiTaskRun = Omit<AiTaskRun, 'onCancel' | 'onOpen'>
+
+/** 统一识别 IPC 的业务失败，避免 Promise 正常 resolve 却被任务中心误标为完成。 */
+export function getAiTaskResultError(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null
+  const result = value as { success?: unknown; error?: unknown }
+  if (result.success !== false) return null
+  return typeof result.error === 'string' && result.error.trim()
+    ? result.error.trim()
+    : 'AI 任务执行失败'
+}
 
 /** 把任务中心状态保存为纯数据；取消回调不能跨应用重启。 */
 export function serializeAiTaskRuns(runs: ReadonlyMap<string, AiTaskRun>): string {
-  const values: PersistedAiTaskRun[] = Array.from(runs.values()).map(({ onCancel: _onCancel, ...run }) => run)
+  const values: PersistedAiTaskRun[] = Array.from(runs.values()).map(({
+    onCancel: _onCancel,
+    onOpen: _onOpen,
+    ...run
+  }) => run)
   return JSON.stringify(values)
 }
 

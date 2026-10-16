@@ -69,14 +69,14 @@ export function wrapToolsWithRuntimeBudget(
     handler: async (input, ctx) => {
       const args = normalizeArgs(input)
       const kind = classifyTool(tool.definition.name)
-      if (kind === 'read') {
+      if (kind === 'read' && !(tool.definition.name === 'read_project_data' && typeof args.scan_cursor === 'number')) {
         if (plan.enforceToolBudgets && ledger.readCalls >= plan.maxReadToolCalls) {
-          return stopForBudget(ledger, `本批读取次数已达上限（${plan.maxReadToolCalls} 次）。请基于已有证据给出阶段结论，并说明下一批需要继续读取什么。`)
+          return stopForBudget(ledger, `本批读取次数已达上限（${plan.maxReadToolCalls} 次）。请停止读取；若已有证据足够，继续执行本轮允许的暂存或回答。只有缺少必要事实时才提示下一批读取。`)
         }
         ledger.readCalls += 1
       } else if (kind === 'search') {
         if (plan.enforceToolBudgets && ledger.searchCalls >= plan.maxSearchToolCalls) {
-          return stopForBudget(ledger, `本批搜索次数已达上限（${plan.maxSearchToolCalls} 次）。请停止搜索并整理阶段结论。`)
+          return stopForBudget(ledger, `本批搜索次数已达上限（${plan.maxSearchToolCalls} 次）。请停止搜索；若已有证据足够，继续执行本轮允许的暂存或回答，不要把搜索上限当作所有操作都已停止。`)
         }
         ledger.searchCalls += 1
       } else if (kind === 'stage') {
@@ -115,7 +115,7 @@ function coerceLightweightArgs(
     const max = typeof next.max_results === 'number' ? next.max_results : plan.defaultReadLimit
     next.max_results = Math.max(1, Math.min(Math.floor(max), plan.defaultReadLimit))
   }
-  if (toolName === 'read_project_data') {
+  if (toolName === 'read_project_data' && typeof next.scan_cursor !== 'number') {
     const hasPreciseTarget = Boolean(String(next.entity_id ?? '').trim() || String(next.doc_key ?? '').trim())
     const entityType = String(next.entity_type ?? '').trim()
     const isTargetedChapterRead = hasPreciseTarget && entityType === 'chapters'

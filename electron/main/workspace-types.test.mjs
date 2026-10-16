@@ -28,6 +28,16 @@ test('项目级 Skill 预设绑定会持久化，并清理未知预设与重复 
   })
 })
 
+test('项目封面允许显式清空，不会被默认渐变重新覆盖', () => {
+  const project = normalizeProjectRecord({ id: 'project-clear-cover', cover: '' })
+  assert.equal(project.cover, '')
+})
+
+test('故事定位是独立项目字段，旧项目缺失时兼容为空', () => {
+  assert.equal(normalizeProjectRecord({ id: 'new', premise: '  主角寻找失落的王城  ' }).premise, '主角寻找失落的王城')
+  assert.equal(normalizeProjectRecord({ id: 'legacy' }).premise, '')
+})
+
 test('采样惩罚参数按 -2 到 2 规范化，缺失值保持为空', () => {
   const normalized = normalizeAppSettings({
     presencePenalty: 4,

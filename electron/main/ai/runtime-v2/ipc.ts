@@ -41,6 +41,7 @@ import { configureRuntimeState, getSharedConversation } from './state'
 import { finalizeCommitBatch } from './commit-result'
 import type { EvidenceLedger } from './evidence-ledger'
 import type { AssistantRuntimePlan } from './planner'
+import { rollbackAiGameRun } from '../../game-progression-store'
 
 /** Phase 2 才注入的执行计划解析器：把 Surface + user request → prompt + tools。 */
 export type ResolveTurnExecutionPlan = (params: {
@@ -72,6 +73,8 @@ export interface AssistantIpcDeps {
   commitChange?: StagedChangeCommitter
   /** 至少一项写回成功后刷新工作区快照；刷新失败不改变写库结果。 */
   afterCommit?: () => Promise<void> | void
+  beginCommit?: () => void
+  endCommit?: () => void
   /** 可选：把 v2 turn 记录到既有 AI 运行日志。 */
   emitAiRunEvent?: (payload: { projectId: string; meta: Record<string, unknown> }) => void
 }
@@ -395,7 +398,7 @@ function registerTurnHandlers(): void {
           tools: plan.tools,
           settings: plan.settings,
           signal: controller.signal,
-          maxSteps: payload.surface.maxSteps,
+          maxSteps: plan.runtimePlan.maxModelCalls,
           maxOutputTokens: plan.maxOutputTokens,
           onTurnCreated: (turnId) => {
             registerActiveKey(turnId)
@@ -407,6 +410,9 @@ function registerTurnHandlers(): void {
             })
           }
         })
+        if (result.status !== 'done') {
+          try { rollbackAiGameRun(await requireDep('ensureDb')(), session.projectId, result.turnId) } catch { /* best-effort cleanup */ }
+        }
         const ledgerSnapshot = plan.evidenceLedger.snapshot()
         const resumable = shouldOfferContinuation(plan.runtimePlan, ledgerSnapshot, result)
         persistTurnRuntimeState({
@@ -424,7 +430,11 @@ function registerTurnHandlers(): void {
             label: plan.runtimePlan.continuationLabel,
             prompt: plan.runtimePlan.continuationPrompt,
             reason: ledgerSnapshot.budgetExhausted
-              ? '本批读取预算已用完，建议进入下一批。'
+              ? (ledgerSnapshot.notes.at(-1)?.includes('搜索')
+                  ? (ledgerSnapshot.stageCalls > 0
+                      ? '本批搜索次数已达上限；已暂存的内容可先审阅，必要时再继续下一批。'
+                      : '本批搜索次数已达上限；本轮没有暂存变更，可继续下一批。')
+                  : '本批读取或暂存次数已达上限，必要时可继续下一批。')
               : '这是分批任务，建议按下一批继续推进。'
           })
         }
@@ -536,11 +546,16 @@ function registerStageHandlers(): void {
       if ((!payload.changeIds || payload.changeIds.length === 0) && !payload.sessionId) {
         throw new Error('stage commit requires sessionId when changeIds is omitted')
       }
-      const results = await stagedChangesStore.commit(committer, {
-        sessionId: payload.sessionId,
-        changeIds: payload.changeIds
-      })
-      return finalizeCommitBatch(results, deps?.afterCommit)
+      deps?.beginCommit?.()
+      try {
+        const results = await stagedChangesStore.commit(committer, {
+          sessionId: payload.sessionId,
+          changeIds: payload.changeIds
+        })
+        return await finalizeCommitBatch(results, deps?.afterCommit)
+      } finally {
+        deps?.endCommit?.()
+      }
     }
   )
 }

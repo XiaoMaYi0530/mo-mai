@@ -7,6 +7,7 @@ import outlineItem from './outline-item'
 import outlineBatch from './outline-batch'
 import outlineChain from './outline-chain'
 import projectBootstrap from './project-bootstrap'
+import premiseDialog from './premise-dialog'
 import premiseEnhance from './premise-enhance'
 import chapterAnalysis from './chapter-analysis'
 import inspirationPack from './inspiration-pack'
@@ -29,6 +30,7 @@ import referenceDeepAnalyze from './reference-deep-analyze'
 import styleFingerprintExtract from './style-fingerprint-extract'
 import storyConceptOptions from './story-concept-options'
 import referenceProjectBlueprint from './reference-project-blueprint'
+import referenceBlueprintRevise from './reference-blueprint-revise'
 import storyDeepAudit from './story-deep-audit'
 import chapterRepair from './chapter-repair'
 import chapterSessionNote from './chapter-session-note'
@@ -69,6 +71,7 @@ register(outlineItem)
 register(outlineBatch)
 register(outlineChain)
 register(projectBootstrap)
+register(premiseDialog)
 register(premiseEnhance)
 register(chapterAnalysis)
 register(inspirationPack)
@@ -91,6 +94,7 @@ register(referenceDeepAnalyze)
 register(styleFingerprintExtract)
 register(storyConceptOptions)
 register(referenceProjectBlueprint)
+register(referenceBlueprintRevise)
 register(storyDeepAudit)
 register(chapterRepair)
 register(chapterSessionNote)

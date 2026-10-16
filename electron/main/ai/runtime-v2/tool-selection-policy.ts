@@ -33,7 +33,7 @@ function targetStageTools(text: string): Set<string> {
     names.add('stage_organization')
     names.add('stage_organization_membership')
   }
-  if (/(大纲|剧情节点|卷纲|分卷)/.test(text)) {
+  if (/(大纲|剧情节点|卷纲|分卷|第[零一二两三四五六七八九十百\d]+卷)/.test(text)) {
     names.add('stage_outline')
     names.add('stage_outline_volume')
   }

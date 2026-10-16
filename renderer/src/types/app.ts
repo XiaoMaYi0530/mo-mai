@@ -319,6 +319,8 @@ export interface ProjectSummary {
   title: string
   /** 题材分类，如"科幻"、"仙侠" */
   genre: string
+  /** 作品级故事定位，不随分卷摘要调整而变化。 */
+  premise: string
   /** 小说长度分类：长篇 / 短篇 */
   novelLength: NovelLength
   /** 由章节正文自动汇总出的项目累计字数展示 */

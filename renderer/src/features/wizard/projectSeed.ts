@@ -108,6 +108,7 @@ export interface ProjectWorkspaceSeed {
   project: {
     title: string
     genre: string
+    premise: string
     novelLength: NovelLength
     wordCount: string
     cover: string
@@ -127,11 +128,45 @@ export interface ProjectWorkspaceSeed {
   chapters: ChapterDraft[]
 }
 
+function bindSeedReferences(
+  seed: ProjectWorkspaceSeed,
+  referenceWorkIds: string[],
+  styleReferenceWorkId: string
+): ProjectWorkspaceSeed {
+  return {
+    ...seed,
+    project: {
+      ...seed.project,
+      selectedReferenceWorkIds: [...new Set(referenceWorkIds.map((id) => id.trim()).filter(Boolean))],
+      styleFingerprintBinding: {
+        version: 1,
+        primaryReferenceWorkId: styleReferenceWorkId.trim(),
+        primaryWeight: 100,
+        auxiliary: []
+      }
+    }
+  }
+}
+
+/** 跳过路线和骨架生成；复制指定世界观内容，创建新的空白写作工作区。 */
+export function createProjectWorkspaceSeedFromReferenceDirect(
+  values: ProjectWizardValues,
+  worldviewEntries: readonly WorldviewEntry[],
+  referenceWorkIds: string[],
+  styleReferenceWorkId = ''
+): ProjectWorkspaceSeed {
+  return bindSeedReferences(createProjectWorkspaceSeed(values, {
+    worldviewEntries: worldviewEntries.map(({ type, title, content }) => ({ type, title, content })),
+    outlineItems: []
+  }), referenceWorkIds, styleReferenceWorkId)
+}
+
 /** 将已审阅的“拆书转原创骨架”结果写成标准项目种子，不另建一套项目数据结构。 */
 export function createProjectWorkspaceSeedFromReferenceBlueprint(
   values: ProjectWizardValues,
   blueprint: ReferenceProjectBlueprintResult,
-  referenceWorkIds: string[]
+  referenceWorkIds: string[],
+  styleReferenceWorkId = ''
 ): ProjectWorkspaceSeed {
   const base = createProjectWorkspaceSeed(values, {
     worldviewEntries: blueprint.worldviewEntries,
@@ -172,7 +207,7 @@ export function createProjectWorkspaceSeedFromReferenceBlueprint(
     const source = blueprint.outlineItems[outlineIndex]
     // 远期分卷只保存路线与剧情节点；章节在推进到该卷时再滚动规划。
     if (source?.volumeIndex !== 0) return []
-    const plans = source?.chapterPlan?.length ? source.chapterPlan : [{
+    const plans = source?.chapterPlan ?? [{
       title: source?.title,
       conflict: source?.conflict,
       summary: source?.summary
@@ -194,22 +229,12 @@ export function createProjectWorkspaceSeedFromReferenceBlueprint(
     })
   })
 
-  return {
+  return bindSeedReferences({
     ...base,
-    project: {
-      ...base.project,
-      selectedReferenceWorkIds: [...new Set(referenceWorkIds.map((id) => id.trim()).filter(Boolean))],
-      styleFingerprintBinding: {
-        version: 1,
-        primaryReferenceWorkId: referenceWorkIds.map((id) => id.trim()).find(Boolean) ?? '',
-        primaryWeight: 100,
-        auxiliary: []
-      }
-    },
     outlineVolumes,
     outlineItems,
     chapters: chapters.length ? chapters : base.chapters
-  }
+  }, referenceWorkIds, styleReferenceWorkId)
 }
 
 interface NovelLengthPreset {
@@ -467,6 +492,7 @@ export function createProjectWorkspaceSeedFromSpiral(
     project: {
       title: values.title.trim(),
       genre: values.genre.trim(),
+      premise: values.premise.trim(),
       novelLength,
       wordCount: preset.projectWordCount,
       cover: DEFAULT_PROJECT_COVER,
@@ -542,6 +568,7 @@ export function createProjectWorkspaceSeed(
     project: {
       title: values.title.trim(),
       genre: values.genre.trim(),
+      premise: values.premise.trim(),
       novelLength,
       wordCount: preset.projectWordCount,
       cover: DEFAULT_PROJECT_COVER,

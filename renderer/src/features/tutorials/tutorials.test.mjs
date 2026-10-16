@@ -9,8 +9,8 @@ const LOCAL_TUTORIAL = normalizeTutorial(JSON.parse(
 ))
 assert.ok(LOCAL_TUTORIAL)
 
-test('本地教程包含飞书入口和待发布的视频入口', () => {
-  assert.equal(LOCAL_TUTORIAL.resources.find((item) => item.type === 'feishu')?.url.startsWith('https://'), true)
+test('本地教程包含仓库图文教程和待发布的视频入口', () => {
+  assert.equal(LOCAL_TUTORIAL.resources.find((item) => item.type === 'github')?.url, 'https://github.com/15810785091/mo-mai/blob/main/docs/user-guide.md')
   assert.equal(LOCAL_TUTORIAL.resources.some((item) => item.type === 'bilibili' && item.enabled === false), true)
 })
 

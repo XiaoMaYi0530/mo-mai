@@ -9,13 +9,14 @@ const readSource = (path) => readFileSync(new URL(path, `file:///${rootDir.repla
 test('拆书创建项目先生成可审阅骨架，并强制原创化转换', () => {
   const task = readSource('electron/main/ai/tasks/reference-project-blueprint.ts')
   const modal = readSource('renderer/src/components/ReferenceProjectBlueprintModal.vue')
+    + readSource('renderer/src/features/wizard/useReferenceProjectCreation.ts')
 
   assert.match(task, /不得沿用参考作品的人名、地名、势力名/)
   assert.match(task, /不得按参考作品章节逐章一一对应/)
   assert.match(task, /transformationNotes/)
   assert.match(modal, /尚未创建项目/)
   assert.match(modal, /确认骨架并创建项目/)
-  assert.match(modal, /\[asset\.id\]/)
+  assert.match(modal, /selectedReferences\.value\.map\(\(\{ asset: selected \}\) => selected\.id\)/)
   assert.doesNotMatch(modal, /长篇（3-4 卷骨架）/)
   assert.match(modal, /自动分卷/)
   assert.match(modal, /手动分卷/)
@@ -27,10 +28,58 @@ test('拆书创建项目先生成可审阅骨架，并强制原创化转换', ()
   assert.match(modal, /章建议/)
 })
 
+test('拆书创建按用途分配最多三本参考，文风绑定默认关闭', () => {
+  const modal = readSource('renderer/src/components/ReferenceProjectBlueprintModal.vue')
+    + readSource('renderer/src/features/wizard/useReferenceProjectCreation.ts')
+  const seed = readSource('renderer/src/features/wizard/projectSeed.ts')
+  const conceptTask = readSource('electron/main/ai/tasks/story-concept-options.ts')
+  const blueprintTask = readSource('electron/main/ai/tasks/reference-project-blueprint.ts')
+
+  assert.match(modal, /mainPurpose: 'pacing'/)
+  assert.match(modal, /auxiliaries: \[/)
+  assert.match(modal, /new Set\(selectedIds\)\.size !== selectedIds\.length/)
+  assert.match(modal, /referenceSources/)
+  assert.match(modal, /bindStyle: false/)
+  assert.match(modal, /referencePlan\.bindStyle \? referencePlan\.styleReferenceId : ''/)
+  assert.match(seed, /primaryReferenceWorkId: styleReferenceWorkId\.trim\(\)/)
+  assert.match(conceptTask, /辅助参考只能补对应维度/)
+  assert.match(blueprintTask, /不要把不同参考作品的具体情节链/)
+})
+
+test('确认前可修改骨架，删除的章节建议不会在创建时重新出现', () => {
+  const modal = readSource('renderer/src/components/ReferenceProjectBlueprintModal.vue')
+    + readSource('renderer/src/features/wizard/useReferenceProjectCreation.ts')
+  const seed = readSource('renderer/src/features/wizard/projectSeed.ts')
+
+  assert.match(modal, /startEditingBlueprint/)
+  assert.match(modal, /saveEditingBlueprint/)
+  assert.match(modal, /cancelEditingBlueprint/)
+  assert.match(modal, /v-model:value="result\.outlineVolumes\[index\]\.summary"/)
+  assert.match(modal, /v-model:value="entry\.summary"/)
+  assert.match(modal, /v-model:value="chapter\.summary"/)
+  assert.match(modal, /validateBlueprint\(result\.value\)/)
+  assert.match(seed, /const plans = source\?\.chapterPlan \?\?/)
+})
+
+test('拆书创建可复制当前小说世界观并跳过骨架生成', () => {
+  const modal = readSource('renderer/src/components/ReferenceProjectBlueprintModal.vue')
+    + readSource('renderer/src/features/wizard/useReferenceProjectCreation.ts')
+  const seed = readSource('renderer/src/features/wizard/projectSeed.ts')
+
+  assert.match(modal, /不生成骨架，直接创建/)
+  assert.match(modal, /createDirectProject/)
+  assert.match(modal, /sourceWorldviewEntries/)
+  assert.match(modal, /shouldGenerate: false/)
+  assert.match(seed, /createProjectWorkspaceSeedFromReferenceDirect/)
+  assert.match(seed, /worldviewEntries: worldviewEntries\.map\(\(\{ type, title, content \}\) => \(\{ type, title, content \}\)\)/)
+  assert.match(seed, /outlineItems: \[\]/)
+})
+
 test('拆书创建小说先发散四条路线，用户选择后才生成骨架', () => {
   const conceptTask = readSource('electron/main/ai/tasks/story-concept-options.ts')
   const blueprintTask = readSource('electron/main/ai/tasks/reference-project-blueprint.ts')
   const modal = readSource('renderer/src/components/ReferenceProjectBlueprintModal.vue')
+    + readSource('renderer/src/features/wizard/useReferenceProjectCreation.ts')
   const schema = readSource('electron/main/ai/tasks/object-schemas.ts')
   const skill = readSource('resources/skills/Distilled-Novel-Toolbox/novel-innovation/SKILL.md')
 
@@ -53,6 +102,7 @@ test('拆书骨架优先细化首卷，远期卷不提前创建章节', () => {
   const task = readSource('electron/main/ai/tasks/reference-project-blueprint.ts')
   const seed = readSource('renderer/src/features/wizard/projectSeed.ts')
   const modal = readSource('renderer/src/components/ReferenceProjectBlueprintModal.vue')
+    + readSource('renderer/src/features/wizard/useReferenceProjectCreation.ts')
   const outlinePanel = readSource('renderer/src/components/OutlinePanel.vue')
 
   assert.match(task, /第一卷优先给出 8-12 个有因果递进的剧情节点/)

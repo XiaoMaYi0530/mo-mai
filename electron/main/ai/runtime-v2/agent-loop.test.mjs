@@ -89,6 +89,58 @@ test('项目级全局助手对全项目任务分批并限制资料读取', async
   assert.equal(ledger.snapshot().budgetExhausted, true)
 })
 
+test('大纲任务搜索触顶后仍允许基于已确认信息暂存节点', async () => {
+  const surface = { id: 'global-page', scope: 'project', autoCommit: false, maxSteps: 12 }
+  const plan = createRuntimePlan({
+    surface,
+    request: {
+      sessionId: 'session-1',
+      surface,
+      userMessage: '好的已经确认写回了，现在可以生成大纲了',
+      intentHint: 'outline:ingest'
+    }
+  })
+  const ledger = createEvidenceLedger()
+  const [search, stage] = wrapToolsWithRuntimeBudget([
+    { definition: { name: 'search_project' }, handler: async () => ({ content: '搜索结果' }) },
+    { definition: { name: 'stage_outline' }, handler: async () => ({ content: '已暂存大纲' }) }
+  ], plan, ledger)
+
+  for (let index = 0; index < plan.maxSearchToolCalls; index += 1) {
+    assert.equal((await search.handler({}, {})).content, '搜索结果')
+  }
+  const blocked = await search.handler({}, {})
+  assert.match(blocked.content, /搜索次数已达上限/)
+  assert.match(blocked.content, /继续.*暂存/)
+  for (let index = 0; index < plan.maxStageChanges; index += 1) {
+    assert.equal((await stage.handler({}, {})).content, '已暂存大纲')
+  }
+  assert.match((await stage.handler({}, {})).content, /暂存变更数量已达上限/)
+  assert.equal(ledger.snapshot().stageCalls, 30)
+})
+
+test('全局录入允许连续暂存超过旧的五项限制', async () => {
+  const surface = { id: 'global-page', scope: 'project', autoCommit: false, maxSteps: 12 }
+  const plan = createRuntimePlan({
+    surface,
+    request: {
+      sessionId: 'session-1', surface,
+      userMessage: '继续录入这些人物、组织与世界观设定',
+      intentHint: 'global-assistant-v2:ingest'
+    }
+  })
+  const ledger = createEvidenceLedger()
+  const [stage] = wrapToolsWithRuntimeBudget([
+    { definition: { name: 'stage_character' }, handler: async () => ({ content: '已暂存人物' }) }
+  ], plan, ledger)
+
+  for (let index = 0; index < 20; index += 1) {
+    assert.equal((await stage.handler({}, {})).content, '已暂存人物')
+  }
+  assert.match((await stage.handler({}, {})).content, /暂存变更数量已达上限（20 项）/)
+  assert.equal(ledger.snapshot().stageCalls, 20)
+})
+
 test('项目级全局助手允许完整读取章节正文', async () => {
   const surface = {
     id: 'global-page',
@@ -245,4 +297,28 @@ test('运行被中止时发送 canceled 事件并更新 turn 状态', async () =
     status: 'canceled',
     finalText: ''
   }])
+})
+
+test('检查全部人物先逐批审查，再汇总，读取记录与用量完整保存', async () => {
+  const batches = [
+    { module:'characters',total:3,items:[{id:'a',title:'甲',mode:'full',from:0,to:1,total:1},{id:'b',title:'乙',mode:'full',from:0,to:1,total:1}],nextCursor:1 },
+    { module:'characters',total:3,items:[{id:'c',title:'丙',mode:'full',from:0,to:1,total:1}] }
+  ]
+  const prompts=[]
+  const {loop,conversation}=makeLoop(async params=>{
+    prompts.push(params.userPrompt)
+    return {finalText: prompts.length<3?'本批核对记录':'全部人物汇总',iterations:1,toolCalls:[],usage:{totalTokens:10,cachedInputTokens:2}}
+  })
+  const options=makeOptions(new AbortController().signal)
+  options.turnInput.userMessage='检查全部人物卡'
+  options.tools=[{definition:{name:'read_project_data'},handler:async args=>({content:'MO_MAI_READ_RECEIPT '+JSON.stringify(batches[args.scan_cursor])+'\n人物资料'})}]
+  const result=await loop.run(options)
+  assert.equal(result.status,'done')
+  assert.equal(prompts.length,3)
+  assert.match(prompts[2],/本批核对记录/)
+  const events=conversation.persistedEvents.filter(e=>e.kind==='tool_result')
+  assert.equal(events.length,2)
+  assert.match(events[1].content,/丙/)
+  assert.equal(result.usage.totalTokens,30)
+  assert.equal(result.usage.cachedInputTokens,6)
 })

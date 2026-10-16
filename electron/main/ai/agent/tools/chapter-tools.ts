@@ -1,3 +1,4 @@
+import { encodeReadReceipt } from '../../../../shared/project-read-receipt.ts'
 import { randomUUID } from 'node:crypto'
 import type { Tool } from './types'
 import {
@@ -156,7 +157,11 @@ export function createChapterTools(callbacks: ChapterToolCallbacks): Tool[] {
         lines.push(`\n${formatTextWindowNote(window)}\nContent:\n${window.text}`)
       }
 
-      return { content: lines.join('\n') }
+      const window = sliceTextWindow(chapterHtmlToPlainText(chapter.content), { offset: input.content_offset, limit: input.content_limit })
+      const catalog = await listProjectChapters(ctx.projectId)
+      return { content: encodeReadReceipt({ module: 'chapters', total: catalog.length, catalog: catalog.map(({ id, title }) => ({ id, title })), items: [{ id: chapterId, title: chapter.title,
+        mode: !includeContent ? 'summary' : window.offset === 0 && !window.truncated ? 'full' : 'partial',
+        from: window.offset, to: window.end, total: window.total }] }, lines.join('\n')) }
     }
   }
 

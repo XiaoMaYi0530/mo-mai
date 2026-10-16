@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
-import { ArrowLeft, BookA, CheckCircle2, ChevronRight, Info, LoaderCircle, Sparkles, X } from 'lucide-vue-next'
+import { ArrowLeft, BookA, CheckCircle2, ChevronRight, Info, Lightbulb, LoaderCircle, MessageCircle, Send, Sparkles, X } from 'lucide-vue-next'
 import { NButton, NInput, NModal, useMessage } from 'naive-ui'
 import { useAppStore } from '@/stores/app'
 import { toIpcPayload } from '@/utils/ipcPayload'
@@ -32,6 +32,26 @@ const step = ref(1)
 const isGenerating = ref(false)
 const isCancelling = ref(false)
 const isPremiseOptimizing = ref(false)
+const isPremiseDialogOpen = ref(false)
+const isPremiseDialogBusy = ref(false)
+const premiseDialogInput = ref('')
+const premiseDialogDraft = ref('')
+const premiseDialogQuestions = ref<string[]>([])
+const premiseDialogMessagesEl = ref<HTMLElement | null>(null)
+
+type PremiseDialogMessage = { role: 'user' | 'assistant'; content: string }
+type PremiseDialogResult = { reply: string; questions: string[]; premise: string; ready: boolean }
+
+const premiseDialogMessages = ref<PremiseDialogMessage[]>([
+  { role: 'assistant', content: '不用先写完整简介。告诉我一个人物、能力、关系、场景，甚至只说一句“我想写某种感觉”也可以。我会先帮你缩小方向，再整理成能直接使用的简介。' }
+])
+
+const premiseDirections = [
+  { title: '从主角困境开始', description: '主角现在最缺什么？得不到会失去什么？', seed: '我想先从主角入手。请帮我确定主角的处境、最想得到的东西和失败代价。' },
+  { title: '从独特设定开始', description: '能力、规则或身份怎样制造反差？', seed: '我有一个设定或能力方面的想法，请通过几个具体选项帮我把它变成故事钩子。' },
+  { title: '从冲突事件开始', description: '哪件事迫使主角立刻采取行动？', seed: '我想先确定故事开局的触发事件，以及这件事为什么让主角无法回头。' },
+  { title: '从人物关系开始', description: '谁与主角互相需要，又彼此妨碍？', seed: '我想从人物关系切入，请帮我设计一组既互相需要、又存在持续冲突的核心关系。' }
+] as const
 
 type GenerationMode = 'off' | 'quick' | 'deep'
 
@@ -178,6 +198,14 @@ function resetWizard(): void {
   isGenerating.value = false
   isCancelling.value = false
   isPremiseOptimizing.value = false
+  isPremiseDialogOpen.value = false
+  isPremiseDialogBusy.value = false
+  premiseDialogInput.value = ''
+  premiseDialogDraft.value = ''
+  premiseDialogQuestions.value = []
+  premiseDialogMessages.value = [
+    { role: 'assistant', content: '不用先写完整简介。告诉我一个人物、能力、关系、场景，甚至只说一句“我想写某种感觉”也可以。我会先帮你缩小方向，再整理成能直接使用的简介。' }
+  ]
   spiralPhase.value = 'idle'
   spiralPhaseStatus.value = 'idle'
   formData.title = ''
@@ -186,6 +214,72 @@ function resetWizard(): void {
   formData.novelLength = 'long'
   formData.premise = ''
   formData.generationMode = 'deep'
+}
+
+function openPremiseDialog(seed = ''): void {
+  isPremiseDialogOpen.value = true
+  if (seed) premiseDialogInput.value = seed
+  void nextTick(scrollPremiseDialogToBottom)
+}
+
+function scrollPremiseDialogToBottom(): void {
+  const element = premiseDialogMessagesEl.value
+  if (element) element.scrollTop = element.scrollHeight
+}
+
+async function sendPremiseDialog(messageText?: string, forceDraft = false): Promise<void> {
+  if (isPremiseDialogBusy.value) return
+  const content = (messageText ?? premiseDialogInput.value).trim()
+  if (!content) return
+
+  const userMessage: PremiseDialogMessage = { role: 'user', content }
+  premiseDialogMessages.value.push(userMessage)
+  premiseDialogInput.value = ''
+  premiseDialogQuestions.value = []
+  isPremiseDialogBusy.value = true
+  await nextTick()
+  scrollPremiseDialogToBottom()
+  try {
+    const result = await window.characterArc.generateAi(toIpcPayload({
+      task: 'premise-dialog',
+      settings: appStore.appSettings,
+      context: {
+        projectTitle: formData.title.trim(),
+        projectGenre: resolvedGenre.value,
+        projectNovelLengthLabel: novelLengthLabel.value,
+        currentPremise: formData.premise.trim(),
+        dialogDraft: premiseDialogDraft.value,
+        messages: premiseDialogMessages.value.slice(-10),
+        forceDraft
+      }
+    }))
+    if (!result.success || !result.result) throw new Error(result.error ?? 'AI 构思失败，请检查模型配置')
+    const response = result.result as PremiseDialogResult
+    if (!response.reply?.trim()) throw new Error('AI 未返回有效的构思回复')
+    premiseDialogMessages.value.push({ role: 'assistant', content: response.reply.trim() })
+    premiseDialogQuestions.value = Array.isArray(response.questions)
+      ? response.questions.map((item) => String(item).trim()).filter(Boolean).slice(0, 3)
+      : []
+    if (response.ready && response.premise?.trim()) premiseDialogDraft.value = response.premise.trim()
+    await nextTick()
+    scrollPremiseDialogToBottom()
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : 'AI 构思失败，请稍后重试')
+  } finally {
+    isPremiseDialogBusy.value = false
+  }
+}
+
+function requestPremiseDraft(): void {
+  void sendPremiseDialog('请按目前已经确定的信息，先整理一版可以继续修改的小说简介。', true)
+}
+
+function usePremiseDialogDraft(): void {
+  const draft = premiseDialogDraft.value.trim()
+  if (!draft) return
+  formData.premise = draft
+  isPremiseDialogOpen.value = false
+  message.success('已将对话构思结果填入小说简介')
 }
 
 async function goBack(): Promise<void> {
@@ -510,8 +604,33 @@ onBeforeUnmount(() => stopGenerationTimer(true))
               <section class="content-card premise-card">
                 <div class="section-head">
                   <h3>故事钩子</h3>
-                  <p>用一段清晰的简介把主角、冲突和目标立起来，让 AI 知道故事该从哪里发力。</p>
+                  <p>不必一开始就会写简介。可以从下面任意一个方向切入，也可以直接和 AI 聊出故事。</p>
                 </div>
+
+                <section class="premise-guide-panel">
+                  <div class="premise-guide-head">
+                    <div>
+                      <span class="premise-guide-icon"><Lightbulb :size="17" /></span>
+                      <div><strong>从一个模糊想法开始</strong><small>当前题材：{{ selectedGenreLabel }} · AI 会逐步追问，不会直接替你定死剧情</small></div>
+                    </div>
+                    <n-button type="primary" secondary @click="openPremiseDialog()">
+                      <template #icon><MessageCircle :size="16" /></template>
+                      AI 对话构思
+                    </n-button>
+                  </div>
+                  <div class="premise-direction-grid">
+                    <button
+                      v-for="direction in premiseDirections"
+                      :key="direction.title"
+                      type="button"
+                      class="premise-direction-card"
+                      @click="openPremiseDialog(direction.seed)"
+                    >
+                      <strong>{{ direction.title }}</strong>
+                      <span>{{ direction.description }}</span>
+                    </button>
+                  </div>
+                </section>
 
                 <div class="field grow">
                   <label class="inline-label">
@@ -543,7 +662,7 @@ onBeforeUnmount(() => stopGenerationTimer(true))
                       {{ isPremiseOptimizing ? '正在优化' : 'AI 优化简介' }}
                     </n-button>
                   </div>
-                  <p class="field-hint">AI 会优先根据题材、长短篇和这段简介来生成开局世界观与前三章大纲。</p>
+                  <p class="field-hint">已有明确想法时可以直接填写；只有零散想法时，先用上方对话构思。保存的简介会作为角色、世界观和大纲的共同依据。</p>
                 </div>
 
               </section>
@@ -662,6 +781,83 @@ onBeforeUnmount(() => stopGenerationTimer(true))
         </footer>
       </section>
     </div>
+    <n-modal
+      v-model:show="isPremiseDialogOpen"
+      preset="card"
+      class="premise-dialog-modal"
+      title="AI 对话构思"
+      :bordered="false"
+      :mask-closable="!isPremiseDialogBusy"
+      :closable="!isPremiseDialogBusy"
+      :close-on-esc="!isPremiseDialogBusy"
+    >
+      <div class="premise-dialog-context">
+        <span>{{ formData.title || '未命名作品' }}</span>
+        <span>{{ selectedGenreLabel }}</span>
+        <span>{{ novelLengthLabel }}</span>
+      </div>
+
+      <div ref="premiseDialogMessagesEl" class="premise-dialog-messages arc-scrollbar" aria-live="polite">
+        <article
+          v-for="(dialogMessage, index) in premiseDialogMessages"
+          :key="`${dialogMessage.role}-${index}`"
+          class="premise-dialog-message"
+          :class="dialogMessage.role"
+        >
+          <span>{{ dialogMessage.role === 'assistant' ? 'AI 策划' : '我' }}</span>
+          <p>{{ dialogMessage.content }}</p>
+        </article>
+        <article v-if="isPremiseDialogBusy" class="premise-dialog-message assistant pending">
+          <span>AI 策划</span>
+          <p><LoaderCircle :size="15" class="spin" /> 正在整理你的想法...</p>
+        </article>
+      </div>
+
+      <div v-if="premiseDialogQuestions.length && !isPremiseDialogBusy" class="premise-dialog-suggestions">
+        <span>可以直接选择一个继续：</span>
+        <button
+          v-for="question in premiseDialogQuestions"
+          :key="question"
+          type="button"
+          @click="sendPremiseDialog(question)"
+        >
+          {{ question }}
+        </button>
+      </div>
+
+      <section v-if="premiseDialogDraft" class="premise-dialog-draft">
+        <div><strong>可采用的简介</strong><span>{{ premiseDialogDraft.length }} 字</span></div>
+        <p>{{ premiseDialogDraft }}</p>
+      </section>
+
+      <div class="premise-dialog-compose">
+        <n-input
+          v-model:value="premiseDialogInput"
+          type="textarea"
+          placeholder="随便说一点想法，或回答 AI 的问题…"
+          :autosize="{ minRows: 2, maxRows: 5 }"
+          :maxlength="1200"
+          :disabled="isPremiseDialogBusy"
+          @keydown.enter.exact.prevent="sendPremiseDialog()"
+        />
+        <n-button
+          type="primary"
+          :disabled="!premiseDialogInput.trim() || isPremiseDialogBusy"
+          :loading="isPremiseDialogBusy"
+          @click="sendPremiseDialog()"
+        >
+          <template #icon><Send :size="15" /></template>
+          发送
+        </n-button>
+      </div>
+
+      <template #footer>
+        <div class="premise-dialog-footer">
+          <n-button secondary :disabled="isPremiseDialogBusy" @click="requestPremiseDraft">按目前信息生成一版</n-button>
+          <n-button type="primary" :disabled="!premiseDialogDraft || isPremiseDialogBusy" @click="usePremiseDialogDraft">采用为小说简介</n-button>
+        </div>
+      </template>
+    </n-modal>
     <n-modal
     :show="isGenerating"
     preset="card"
@@ -1041,6 +1237,94 @@ onBeforeUnmount(() => stopGenerationTimer(true))
 
 .premise-input-shell {
   position: relative;
+}
+
+.premise-guide-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--arc-primary) 20%, var(--arc-border));
+  border-radius: var(--arc-radius-lg);
+  background: color-mix(in srgb, var(--arc-primary) 4%, var(--arc-bg-weak));
+}
+
+.premise-guide-head,
+.premise-guide-head > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.premise-guide-head {
+  justify-content: space-between;
+}
+
+.premise-guide-head > div > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.premise-guide-head strong {
+  color: var(--arc-text-primary);
+  font-size: 13px;
+}
+
+.premise-guide-head small {
+  color: var(--arc-text-hint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.premise-guide-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--arc-primary-soft);
+  color: var(--arc-primary);
+}
+
+.premise-direction-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.premise-direction-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 11px;
+  border: 1px solid var(--arc-border);
+  border-radius: var(--arc-radius-md);
+  background: var(--arc-bg-surface);
+  color: var(--arc-text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .18s ease, background .18s ease, transform .18s ease;
+}
+
+.premise-direction-card:hover {
+  border-color: color-mix(in srgb, var(--arc-primary) 30%, var(--arc-border));
+  background: var(--arc-primary-soft);
+  transform: translateY(-1px);
+}
+
+.premise-direction-card strong {
+  font-size: 12px;
+}
+
+.premise-direction-card span {
+  color: var(--arc-text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .premise-input-shell :deep(.n-input-word-count) {
@@ -1741,6 +2025,15 @@ onBeforeUnmount(() => stopGenerationTimer(true))
   .premise-ai-button {
     min-width: 116px;
   }
+
+  .premise-guide-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .premise-direction-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .wizard-step-enter-active {
@@ -1799,9 +2092,167 @@ onBeforeUnmount(() => stopGenerationTimer(true))
   border-radius: 8px;
 }
 
+.premise-dialog-modal {
+  width: min(720px, calc(100vw - 32px));
+  border-radius: 10px;
+}
+
+.premise-dialog-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.premise-dialog-context span {
+  padding: 4px 8px;
+  border: 1px solid var(--arc-border);
+  border-radius: 999px;
+  background: var(--arc-bg-weak);
+  color: var(--arc-text-secondary);
+  font-size: 11px;
+}
+
+.premise-dialog-messages {
+  display: flex;
+  max-height: 330px;
+  min-height: 180px;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--arc-border);
+  border-radius: 10px;
+  background: var(--arc-bg-weak);
+}
+
+.premise-dialog-message {
+  display: flex;
+  max-width: 88%;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.premise-dialog-message.user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.premise-dialog-message > span {
+  color: var(--arc-text-hint);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.premise-dialog-message p {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--arc-border);
+  border-radius: 4px 10px 10px;
+  background: var(--arc-bg-surface);
+  color: var(--arc-text-primary);
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.premise-dialog-message.user p {
+  border-color: color-mix(in srgb, var(--arc-primary) 25%, var(--arc-border));
+  border-radius: 10px 4px 10px 10px;
+  background: var(--arc-primary-soft);
+}
+
+.premise-dialog-message.pending p {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--arc-text-secondary);
+}
+
+.premise-dialog-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.premise-dialog-suggestions > span {
+  color: var(--arc-text-hint);
+  font-size: 11px;
+}
+
+.premise-dialog-suggestions button {
+  padding: 8px 10px;
+  border: 1px solid var(--arc-border);
+  border-radius: 7px;
+  background: var(--arc-bg-surface);
+  color: var(--arc-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.premise-dialog-suggestions button:hover {
+  border-color: color-mix(in srgb, var(--arc-primary) 28%, var(--arc-border));
+  background: var(--arc-primary-soft);
+  color: var(--arc-text-primary);
+}
+
+.premise-dialog-draft {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--arc-primary) 28%, var(--arc-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--arc-primary) 5%, var(--arc-bg-surface));
+}
+
+.premise-dialog-draft > div,
+.premise-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.premise-dialog-draft strong {
+  color: var(--arc-primary);
+  font-size: 12px;
+}
+
+.premise-dialog-draft span {
+  color: var(--arc-text-hint);
+  font-size: 10px;
+}
+
+.premise-dialog-draft p {
+  margin: 7px 0 0;
+  color: var(--arc-text-primary);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.premise-dialog-compose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 @media (max-width: 560px) {
-  .wizard-generation-modal {
+  .wizard-generation-modal,
+  .premise-dialog-modal {
     width: calc(100vw - 24px);
+  }
+
+  .premise-dialog-message {
+    max-width: 96%;
+  }
+
+  .premise-dialog-compose {
+    grid-template-columns: 1fr;
   }
 }
 </style>

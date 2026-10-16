@@ -31,6 +31,7 @@ const archiveModuleOptions: Array<{ label: string; value: CharacterArcProjectArc
   { label: '伏笔线', value: 'plotThreads' },
   { label: '章节正文', value: 'chapters' },
   { label: '故事状态与补录', value: 'storyState' },
+  { label: '游戏数值与装备目录', value: 'gameProgression' },
   { label: '章节版本', value: 'chapterVersions' },
   { label: '创作记忆', value: 'workflowDocuments' },
   { label: '知识文档', value: 'knowledgeDocuments' },
@@ -75,7 +76,7 @@ onBeforeUnmount(() => {
 
 function resetArchiveModules(): void {
   archiveSelectedModules.value = archiveModuleOptions
-    .filter((option) => option.value !== 'storyState' || 'storyState' in (archiveImportPreview.value?.modules ?? {}))
+    .filter((option) => ['storyState', 'gameProgression'].every((module) => option.value !== module || module in (archiveImportPreview.value?.modules ?? {})))
     .map((option) => option.value)
   acknowledgeStoryStateClear.value = false
 }
@@ -123,6 +124,11 @@ async function confirmArchiveImport(): Promise<void> {
       message.warning('导入故事状态需同时勾选章节正文和角色与势力')
       return
     }
+  }
+  if (archiveSelectedModules.value.includes('gameProgression')
+    && (!archiveSelectedModules.value.includes('characters') || !archiveSelectedModules.value.includes('chapters'))) {
+    message.warning('导入游戏数值需同时勾选角色与章节')
+    return
   }
   if (archiveImportMode.value === 'overwrite-project'
     && archiveSelectedModules.value.includes('chapters')
@@ -241,7 +247,7 @@ defineExpose({
         >我确认：覆盖章节后清空目标项目的旧故事状态</n-checkbox>
         <div class="archive-module-grid">
           <label
-            v-for="option in archiveModuleOptions"
+            v-for="option in archiveModuleOptions.filter((item) => ['storyState', 'gameProgression'].every((module) => item.value !== module || module in (archiveImportPreview?.modules ?? {})))"
             :key="option.value"
             class="archive-module-item"
           >

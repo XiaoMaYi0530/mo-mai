@@ -78,10 +78,11 @@ const volumeForm = reactive({
   wordTarget: '',
   summary: ''
 })
-const menuOptions: DropdownOption[] = [ // 大纲节点的右键菜单选项
+const menuOptions = computed<DropdownOption[]>(() => [
   { key: 'edit', label: '编辑节点' },
+  ...(appStore.outlineVolumes.length > 1 ? [{ key: 'move', label: '移动到分卷' }] : []),
   { key: 'delete', label: '删除节点' }
-]
+])
 const volumeCollapsed = reactive<Record<string, boolean>>({})
 
 const allVolumesCollapsed = computed(() =>
@@ -282,18 +283,18 @@ function selectAllVisible(): void {
 
 // 批量删除选中节点
 function batchDeleteSelected(): void {
-  const count = selectedOutlineIds.value.size
+  const ids = Array.from(selectedOutlineIds.value)
+  if (!ids.length) return
+  const count = ids.length
   dialog.warning({
     title: '批量删除',
-    content: `确定要删除选中的 ${count} 个大纲节点吗？此操作不可撤销。`,
+    content: `确定要删除选中的 ${count} 个大纲节点吗？已有章节正文会保留；此操作不可撤销。`,
     positiveText: '确认删除',
     negativeText: '取消',
     autoFocus: false,
     closable: false,
     onPositiveClick: () => {
-      selectedOutlineIds.value.forEach((id) => {
-        appStore.deleteOutlineItem(id)
-      })
+      appStore.deleteOutlineItems(ids)
       selectedOutlineIds.value.clear()
       isSelectionModeActive.value = false
       message.success(`已删除 ${count} 个节点`)
@@ -315,29 +316,38 @@ function batchUpdateStatus(status: string | OutlineItemStatus): void {
 // 批量迁移相关
 const migrateModalVisible = ref(false)
 const migrateTargetVolumeId = ref<string>('')
+const migrateOutlineIds = ref<string[]>([])
+const migrateWithChapters = ref(true)
+const migrateChapterCount = computed(() => appStore.chapters.filter(chapter => migrateOutlineIds.value.includes(chapter.outlineItemId)).length)
+function undoMove() {
+  if (appStore.undoLastOutlineMove()) message.success('已撤销分卷移动，正文修改保留。')
+  else message.warning('目录结构已变化，无法安全撤销，请手动调整。')
+}
 
-function openMigrateModal(): void {
-  if (selectedOutlineIds.value.size === 0) {
-    return
-  }
-  migrateTargetVolumeId.value = appStore.outlineVolumes[0]?.id || ''
+function openMigrateModal(outlineIds: string[]): void {
+  const existingIds = new Set(appStore.outlineItems.map((item) => item.id))
+  migrateOutlineIds.value = [...new Set(outlineIds)].filter((id) => existingIds.has(id))
+  if (!migrateOutlineIds.value.length || appStore.outlineVolumes.length < 2) return
+  const sourceVolumeId = appStore.outlineItems.find((item) => item.id === migrateOutlineIds.value[0])?.volumeId
+  migrateTargetVolumeId.value = appStore.outlineVolumes.find((volume) => volume.id !== sourceVolumeId)?.id ?? ''
+  migrateWithChapters.value = true
   migrateModalVisible.value = true
 }
 
 function submitMigrate(): void {
-  if (!migrateTargetVolumeId.value) {
+  if (!appStore.outlineVolumes.some((volume) => volume.id === migrateTargetVolumeId.value)) {
     message.warning('请选择目标分卷')
     return
   }
 
-  const count = selectedOutlineIds.value.size
-  selectedOutlineIds.value.forEach((id) => {
-    appStore.updateOutlineItem(id, { volumeId: migrateTargetVolumeId.value })
-  })
+  const count = migrateOutlineIds.value.length
+  if (!count) return
+  appStore.moveOutlineItemsToVolumeEnd(migrateOutlineIds.value, migrateTargetVolumeId.value, migrateWithChapters.value)
 
-  message.success(`已迁移 ${count} 个节点`)
+  message.success(`已移动 ${count} 个节点、${migrateWithChapters.value ? migrateChapterCount.value : 0} 个关联章节；可在工具栏撤销。`)
   selectedOutlineIds.value.clear()
   isSelectionModeActive.value = false
+  migrateOutlineIds.value = []
   migrateModalVisible.value = false
 }
 
@@ -1496,24 +1506,6 @@ function isNodeSelected(id: string): boolean {
   return selectedOutlineIds.value.has(id)
 }
 
-// 批量删除
-function handleBatchDelete(): void {
-  const count = selectedOutlineIds.value.size
-  dialog.warning({
-    title: '确认批量删除',
-    content: `确定要删除选中的 ${count} 个大纲节点吗？删除后无法恢复。`,
-    positiveText: '确认删除',
-    negativeText: '取消',
-    onPositiveClick: () => {
-      Array.from(selectedOutlineIds.value).forEach(id => {
-        appStore.deleteOutlineItem(id)
-      })
-      selectedOutlineIds.value.clear()
-      message.success(`已删除 ${count} 个大纲节点`)
-    }
-  })
-}
-
 // --- 拖拽排序相关函数 ---
 function readDraggedOutlineIds(event: DragEvent): string[] {
   const dataStr = event.dataTransfer?.getData('text/plain')
@@ -1677,6 +1669,11 @@ function handleMenuSelect(action: string | number, item: OutlineItem): void {
     openEditor(item)
     return
   }
+  if (action === 'move') {
+    openMigrateModal([item.id])
+    return
+  }
+  if (action !== 'delete') return
 
   dialog.warning({
     title: '确认删除节点',
@@ -1886,6 +1883,7 @@ watch(
         <p>按卷组织剧情骨架、冲突节拍和章节节点，方便后续创作连续推进。</p>
       </div>
       <div class="section-actions">
+        <n-button v-if="appStore.canUndoOutlineMove" size="small" @click="undoMove">撤销分卷移动</n-button>
         <button class="soft-button neutral" @click="toggleAllVolumes">
           <ChevronsDownUp :size="16" />
           <span>{{ allVolumesCollapsed ? '展开全部' : '收起全部' }}</span>
@@ -2292,6 +2290,7 @@ watch(
           <n-select v-model:value="importBatchTarget" :options="importVolumeOptions" placeholder="选择目标分卷" />
         </n-form-item>
       </n-form>
+      <n-checkbox v-model:checked="migrateWithChapters">同时移动关联章节（{{ migrateChapterCount }} 章）</n-checkbox>
       <p style="margin-top: 12px; font-size: 13px; color: var(--arc-text-hint);">
         将所有已选中的节点迁移到所选分卷
       </p>
@@ -2312,6 +2311,7 @@ watch(
           <n-select v-model:value="importBatchStrategy" :options="importBatchStrategyOptions" placeholder="选择处理策略" />
         </n-form-item>
       </n-form>
+      <n-checkbox v-model:checked="migrateWithChapters">同时移动关联章节（{{ migrateChapterCount }} 章）</n-checkbox>
       <p style="margin-top: 12px; font-size: 13px; color: var(--arc-text-hint);">
         批量设置所有节点的导入策略
       </p>
@@ -2493,29 +2493,32 @@ watch(
           <button class="toolbar-link" @click="selectedOutlineIds.clear()">清空</button>
         </div>
         <div class="toolbar-actions">
-          <n-button size="small" @click="openMigrateModal">迁移</n-button>
+          <n-button size="small" :disabled="appStore.outlineVolumes.length < 2" @click="openMigrateModal(Array.from(selectedOutlineIds))">移动到分卷</n-button>
           <n-button size="small" type="error" @click="batchDeleteSelected">删除</n-button>
         </div>
       </div>
     </Transition>
 
-    <!-- 迁移分卷弹窗 -->
+    <!-- 移动到分卷弹窗 -->
     <n-modal
       :show="migrateModalVisible"
       preset="dialog"
-      title="迁移节点到分卷"
-      positive-text="确认迁移"
+      title="移动节点到分卷"
+      @update:show="migrateModalVisible = $event"
+      positive-text="确认移动"
       negative-text="取消"
       @positive-click="submitMigrate"
       @negative-click="migrateModalVisible = false"
     >
       <n-form label-placement="top">
         <n-form-item label="目标分卷">
-          <n-select v-model:value="migrateTargetVolumeId" :options="volumeOptions" placeholder="选择要迁移到的分卷" />
+          <n-select v-model:value="migrateTargetVolumeId" :options="volumeOptions" placeholder="选择目标分卷" />
         </n-form-item>
       </n-form>
+      <n-checkbox v-model:checked="migrateWithChapters">同时移动关联章节（{{ migrateChapterCount }} 章）</n-checkbox>
       <p style="margin-top: 12px; font-size: 13px; color: var(--arc-text-hint);">
-        将 {{ selectedOutlineIds.size }} 个节点迁移到所选分卷
+        将 {{ migrateOutlineIds.length }} 个节点移动到所选分卷末尾。
+        {{ migrateWithChapters ? `同时移动 ${migrateChapterCount} 个关联章节，正文保持不变。` : '关联章节仍留在原卷。' }}
       </p>
     </n-modal>
   </section>

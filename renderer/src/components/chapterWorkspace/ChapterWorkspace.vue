@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { resolveAssistantWidth } from '@/features/chapters/chapterPanelLayout'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Minimize } from 'lucide-vue-next'
@@ -8,6 +9,7 @@ import ChapterEditorPane from './ChapterEditorPane.vue'
 import ChapterAiPanelV2 from './ChapterAiPanelV2.vue'
 import ChapterFirstDraftConfigDialog from './ChapterFirstDraftConfigDialog.vue'
 import ChapterBatchDraftDialog, { type ChapterBatchDraftItem } from './ChapterBatchDraftDialog.vue'
+import ChapterFirstDraftDialog from './ChapterFirstDraftDialog.vue'
 import { normalizeChapterWritingContract, useChapterFirstDraft, type FirstDraftConfig } from './useChapterFirstDraft'
 import type { SurfaceDefinition } from '@shared/assistant-runtime'
 import { useAssistant } from '@/composables/useAssistant'
@@ -37,7 +39,7 @@ const COMPACT_BREAKPOINT = 1180
 const COMPACT_BREAKPOINT_AI_OPEN = 1440
 const DEFAULT_AI_WIDTH = 380
 const MIN_AI_WIDTH = 280
-const MAX_AI_WIDTH = 600
+const MAX_AI_WIDTH = 760
 
 const aiOpen = ref(true)
 const focusMode = ref(false)
@@ -117,8 +119,7 @@ const isCompact = computed(() => {
 })
 
 const effectiveAiWidth = computed(() => {
-  if (isCompact.value) return Math.min(aiPanelWidth.value, 320)
-  return aiPanelWidth.value
+  return resolveAssistantWidth(aiPanelWidth.value, viewportWidth.value, !isCompact.value && !focusMode.value)
 })
 
 const gridStyle = computed(() => {
@@ -389,7 +390,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', syncViewport)
-  draft.unregisterStreamListener()
 })
 </script>
 
@@ -421,6 +421,10 @@ onBeforeUnmount(() => {
     <div
       v-if="aiOpen"
       class="panel-resize-handle"
+      role="separator" aria-label="调整 AI 侧栏宽度" aria-orientation="vertical" tabindex="0"
+      :aria-valuenow="effectiveAiWidth" :aria-valuemin="MIN_AI_WIDTH" :aria-valuemax="MAX_AI_WIDTH"
+      @keydown.left.prevent="aiPanelWidth = Math.min(MAX_AI_WIDTH, aiPanelWidth + 20)"
+      @keydown.right.prevent="aiPanelWidth = Math.max(MIN_AI_WIDTH, aiPanelWidth - 20)"
       :class="{ dragging: isDraggingPanel }"
       @mousedown="startPanelDrag"
       @dblclick="handlePanelDblClick"
@@ -474,6 +478,25 @@ onBeforeUnmount(() => {
       @pause="pauseBatchAfterCurrent"
       @resume="resumeBatchQueue"
       @stop="stopBatchQueue"
+    />
+
+    <ChapterFirstDraftDialog
+      :show="draft.modalVisible.value"
+      :is-generating="draft.isGenerating.value"
+      :is-stopping="draft.isStopping.value"
+      :is-auditing="draft.isAuditing.value"
+      :is-streaming="draft.isStreaming.value"
+      :execution-label="draft.executionLabel.value"
+      :reasoning-content="draft.reasoningContent.value"
+      :preview-title="draft.previewTitle.value"
+      :preview-content="draft.previewContent.value"
+      :progress-percent="draft.progressPercent.value"
+      :progress-text="draft.progressText.value"
+      :audit-result="draft.auditResult.value"
+      :elapsed-seconds="draft.elapsedSeconds.value"
+      @minimize="draft.minimizeModal()"
+      @stop="async () => { try { await draft.stop() } catch (e) { message.error(e instanceof Error ? e.message : '停止失败') } }"
+      @close="draft.closeModal()"
     />
   </section>
 </template>

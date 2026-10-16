@@ -16,6 +16,7 @@ const emit = defineEmits<{
   (e: 'openDeconstruction'): void
   (e: 'openFanqieTrends'): void
   (e: 'openCoverWorkbench'): void
+  (e: 'openEquipmentGenerator'): void
   (e: 'openSkills'): void
   (e: 'openSettings'): void
   (e: 'openAnnouncement'): void
@@ -27,6 +28,7 @@ const advancedToolOptions: DropdownOption[] = [
   { label: '拆书知识库', key: 'deconstruction' },
   { label: '写作 Skills', key: 'skills' },
   { label: '封面工作台', key: 'cover' },
+  { label: '装备与技能库', key: 'equipment' },
   { label: '网文风向标', key: 'trends' }
 ]
 
@@ -34,6 +36,7 @@ function openAdvancedTool(key: string | number): void {
   if (key === 'deconstruction') emit('openDeconstruction')
   if (key === 'skills') emit('openSkills')
   if (key === 'cover') emit('openCoverWorkbench')
+  if (key === 'equipment') emit('openEquipmentGenerator')
   if (key === 'trends') emit('openFanqieTrends')
 }
 </script>

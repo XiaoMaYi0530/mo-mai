@@ -11,13 +11,13 @@
 </p>
 
 <p>
-  📘 <a href="https://ecnnfa0ullkb.feishu.cn/wiki/CuMxwE8xwiZyIkkYDDfcdmpjnRe?from=from_copylink"><strong>墨脉使用教程图文版</strong></a>
+  📘 <a href="docs/user-guide.md"><strong>墨脉使用教程图文版</strong></a>
 </p>
 
 <p>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" />
-  <img alt="Version" src="https://img.shields.io/badge/version-v1.14.2-f59e0b?style=flat-square" />
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0ea5e9?style=flat-square" />
+  <img alt="Version" src="https://img.shields.io/badge/version-v1.22.44-f59e0b?style=flat-square" />
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0ea5e9?style=flat-square" />
   <img alt="Electron" src="https://img.shields.io/badge/Electron-37-47848f?style=flat-square&logo=electron&logoColor=white" />
   <img alt="Vue" src="https://img.shields.io/badge/Vue-3.5-42b883?style=flat-square&logo=vue.js&logoColor=white" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" />
@@ -39,13 +39,15 @@
 
 ## ✨ 项目简介
 
-墨脉不是“只会对话的 AI 壳子”，而是一套围绕小说项目组织、章节写作与 AI 协作搭起来的桌面工作台。
+墨脉是一套围绕小说项目组织、章节写作与 AI 协作搭建的桌面工作台，支持从原创构思、参考作品拆解、世界观与大纲规划，到章节创作、审阅和导出。
+
+本文按当前仓库代码说明功能；版本号取自 [package.json](./package.json)，具体安装包所含功能以对应构建版本为准。版本记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
 <table>
   <tr>
     <td width="50%" valign="top">
       <h4>🏠 本地优先</h4>
-      <p>项目数据保存在本机 SQLite，无需依赖在线服务，写作内容完全自己掌控。</p>
+      <p>项目数据保存在本机 SQLite，手动编辑与资料管理可离线使用；调用远程 AI 时会发送本次任务所需的上下文。</p>
     </td>
     <td width="50%" valign="top">
       <h4>📦 项目隔离</h4>
@@ -77,11 +79,17 @@
 
 - **项目中心**：创建、查看、编辑、删除小说项目
 - **新建项目向导**：填写题材、篇幅、简介，可调用 AI 生成首批设定与大纲
+- **新书对话构思**：通过 AI 多轮讨论整理创意，生成简介并回填创建表单
 - **创作记忆面板**：按分卷维护计划、进度、伏笔和素材，支持参考作品拆解
 - **自动派生创作记忆账本**：从章节、大纲、人物、伏笔和项目约束生成统一小结，各模型共用同一份项目进度
 - **知识中心**：沉淀项目事实、创作记忆、参考资料与风格分析结果
 - **分维度深度拆书**：开篇读取黄金章节，主线覆盖全书前中后段，人物与世界观按关键词命中章节取样，并支持缺失维度续作
 - **拆书转原创立项**：先在用户原创方向内生成 4 条因果机制不同的故事路线，手动选定后再生成可审阅的分卷与章节骨架
+- **多本参考分工**：支持 1 本主参考与最多 2 本辅助参考，每本分别指定用途；结构参考与文风指纹独立设置，默认不绑定文风
+- **创建草稿自动恢复**：本机保存参考分工、表单、路线、骨架与未采纳修改，从同一作品和主参考重新打开即可继续
+- **创建前修改骨架**：支持手动修改卷目标、剧情节点和章节建议，也可与 AI 对话生成修改方案，审阅后应用
+- **跳过骨架直接创建**：可复制当前小说的世界观文字，创建带空白起始卷和首章占位的新项目
+- **项目归档与工作区备份**：支持项目归档导入导出，以及包含数据库、参考原文、封面和导入 Skill 的完整本地备份与恢复
 - **技能系统**：支持启用内置 Skill，也支持为单项目导入额外 Skill 包
 
 </details>
@@ -91,7 +99,7 @@
 
 - **世界观 / 角色 / 组织 / 关系管理**：维护小说基础设定资产；世界观批量生成会将英文分类统一归一为中文分类
 - **关系图谱**：可视化角色关系与组织关联（Cytoscape）
-- **剧情大纲**：双栏交错时间线布局，按分卷组织剧情节点，支持拖拽排序与 AI 扩写
+- **剧情大纲**：双栏交错时间线布局，按分卷组织剧情节点，支持拖拽排序、单条或批量移动到分卷、批量删除与 AI 扩写；移动可联动关联章节、预览数量并撤销一次
 - **剧情线索**：辅助维护伏笔、悬念和回收计划
 
 </details>
@@ -120,10 +128,11 @@
 - **推理内容隔离**：兼容 MiniMax、DeepSeek、通义、Kimi、GLM 等模型的 reasoning 字段，并避免思考标记写入正文
 - **接口错误详情**：优先展示中转站返回的 `error` / `message` / `responseBody` 和 HTTP 状态码
 - 灵感发散包生成、参考作品深度拆解
-- **全局助手 v2**：跨项目资料检索、设定修改、审计沉淀和暂存变更审阅
+- **全局助手 v2**：检索当前项目各类资料与公共拆书库，支持设定修改、审计沉淀和暂存变更审阅
 - **Agent Loop 模式**：让模型按 Skill 索引与工具注册表循环思考，v2 可按对话自动匹配 Skills
 - **任务进度面板**：统一查看正在运行与历史 AI 任务
 - **可恢复任务状态**：应用重启后保留中断记录；拆书、状态补录等有检查点的任务从未完成步骤继续
+- **Skill 使用策略**：支持自动匹配、仅使用指定 Skill、不使用 Skill；自动模式可按需加载其他已启用技能，固定模式按指定范围执行
 
 </details>
 
@@ -131,49 +140,90 @@
 <summary><b>🎨 封面工作台</b></summary>
 
 - 面向平台（番茄、起点、晋江、知乎盐言、七猫、刺猬猫等）生成封面 Prompt
-- 调用图像模型生成预览图，可在工作台中对比历史版本
+- 支持图像 API 或本机 Codex CLI 模式，生成后可直接设为作品封面
+- 生成记录保留在当前会话中用于对比；设为作品封面的图片保存到本地
+
+</details>
+
+<details open>
+<summary><b>🎮 游戏数值与网游写作</b></summary>
+
+- **作品级开关**：按需启用游戏数值档案，为人物配置初始等级、属性、背包、装备、称号和已学技能
+- **属性增长**：默认每级获得 5 个属性点，分配到力量、敏捷、智力或体质，自动换算生命、魔法、攻击、法强、速度、闪避与暴击
+- **可配置规则**：可设置每级点数与派生系数；产生章节记录后锁定派生公式和对应人物初始档案，防止重算历史
+- **装备与技能目录**：高级工具支持按风格、等级、槽位与品质生成原创装备及技能，预览后加入作品目录
+- **章节数值账本**：记录升级、加点、换装、技能释放、受伤、恢复与物品消耗，沿章节时间线回放；AI 产生的变化先暂存供作者确认
+- **网游数值战斗写作 Skill**：结合指定拆书的战斗节奏与已确认数值，呈现人物和怪物的属性对照、资源消耗、战术变化与战后结算
+
+派生系数、属性小数精度与战斗公式按章节保存规则版本，较早章节继续使用旧规则。可配置命中上下限、闪避及暴击上限、减伤与速度行动频率，在双方试算中填写判定点数并暂存伤害；战斗规则默认关闭。怪物需要有对应人物卡及数值档案。数值面板支持展开。
+
+助手支持“检查全部人物”自动分批审查，并显示本轮工具实际返回的全文、摘要和未完整读取范围。
 
 </details>
 
 ## 📸 截图
 
-下面这组截图按实际创作流程排列，基本覆盖了墨脉从项目管理、拆书沉淀、Skill 配置到章节写作和封面生成的主要体验。
+以下为 **v1.22.44 当前代码构建的真实界面**，使用独立的原创演示数据。点击图片查看大图；完整操作步骤见 [墨脉使用教程图文版](docs/user-guide.md)。
 
 <table>
   <tr>
     <td width="50%" align="center">
-      <a href="docs/assets/homepage.png"><img src="docs/assets/homepage.png" alt="项目中心" /></a>
-      <br /><sub><b>项目中心</b> · 集中管理所有小说项目</sub>
+      <a href="docs/assets/tutorial/01-projects.png"><img src="docs/assets/tutorial/01-projects.png" alt="项目中心" /></a>
+      <br /><sub><b>项目中心</b> · 管理作品与进入高级工具</sub>
     </td>
     <td width="50%" align="center">
-      <a href="docs/assets/overview.png"><img src="docs/assets/overview.png" alt="项目概览" /></a>
-      <br /><sub><b>项目概览</b> · 基础信息、设定资产、章节进度一目了然</sub>
+      <a href="docs/assets/tutorial/02-overview.png"><img src="docs/assets/tutorial/02-overview.png" alt="作品概览" /></a>
+      <br /><sub><b>作品概览</b> · 检查项目简介与创作进度</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <a href="docs/assets/book_disassembly.png"><img src="docs/assets/book_disassembly.png" alt="拆书与知识库" /></a>
-      <br /><sub><b>拆书与知识库</b> · 导入参考作品后沉淀风格分析、知识条目与仿写参考</sub>
+      <a href="docs/assets/tutorial/06-references.png"><img src="docs/assets/tutorial/06-references.png" alt="拆书知识库" /></a>
+      <br /><sub><b>拆书知识库</b> · 整理参考作品与分析维度</sub>
     </td>
     <td width="50%" align="center">
-      <a href="docs/assets/skills_show.png"><img src="docs/assets/skills_show.png" alt="Skill 系统" /></a>
-      <br /><sub><b>Skill 系统</b> · 为项目启用内置或扩展 Skill，增强不同写作任务的 AI 输出</sub>
+      <a href="docs/assets/tutorial/09-reference-create.png"><img src="docs/assets/tutorial/09-reference-create.png" alt="多本参考创建" /></a>
+      <br /><sub><b>多本参考创建</b> · 明确参考分工，单独选择文风绑定</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <a href="docs/assets/story_line.png"><img src="docs/assets/story_line.png" alt="剧情大纲" /></a>
-      <br /><sub><b>剧情大纲</b> · 双栏交错时间线，支持拖拽排序与 AI 扩写</sub>
+      <a href="docs/assets/tutorial/03-outline.png"><img src="docs/assets/tutorial/03-outline.png" alt="剧情大纲" /></a>
+      <br /><sub><b>剧情大纲</b> · 分卷组织节点与关联章节</sub>
     </td>
     <td width="50%" align="center">
-      <a href="docs/assets/chapter_creation.png"><img src="docs/assets/chapter_creation.png" alt="章节创作" /></a>
-      <br /><sub><b>章节创作</b> · 目录树 + TipTap 编辑器 + AI 侧边栏</sub>
+      <a href="docs/assets/tutorial/11-outline-move.png"><img src="docs/assets/tutorial/11-outline-move.png" alt="批量移动大纲" /></a>
+      <br /><sub><b>批量移动大纲</b> · 选中节点后移到目标分卷</sub>
     </td>
   </tr>
   <tr>
-    <td colspan="2" align="center">
-      <a href="docs/assets/cover_design.png"><img src="docs/assets/cover_design.png" alt="封面工作台" width="60%" /></a>
-      <br /><sub><b>封面工作台</b> · 多平台封面 Prompt 生成与历史版本对比</sub>
+    <td width="50%" align="center">
+      <a href="docs/assets/tutorial/04-story-data.png"><img src="docs/assets/tutorial/04-story-data.png" alt="故事资料" /></a>
+      <br /><sub><b>故事资料</b> · 维护人物、世界规则与关系</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="docs/assets/tutorial/05-chapters.png"><img src="docs/assets/tutorial/05-chapters.png" alt="章节创作" /></a>
+      <br /><sub><b>章节创作</b> · 正文编辑与 AI 修改审阅</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <a href="docs/assets/tutorial/07-skills.png"><img src="docs/assets/tutorial/07-skills.png" alt="写作 Skills" /></a>
+      <br /><sub><b>写作 Skills</b> · 15 个内置技能与项目调用策略</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="docs/assets/tutorial/18-game-attributes.png"><img src="docs/assets/tutorial/18-game-attributes.png" alt="游戏数值" /></a>
+      <br /><sub><b>游戏数值</b> · 管理属性、加点与章节变化</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <a href="docs/assets/tutorial/08-cover.png"><img src="docs/assets/tutorial/08-cover.png" alt="封面工作台" /></a>
+      <br /><sub><b>封面工作台</b> · 生成提示词与作品封面</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="docs/assets/tutorial/15-backup.png"><img src="docs/assets/tutorial/15-backup.png" alt="存储与备份" /></a>
+      <br /><sub><b>存储与备份</b> · 项目归档与完整工作区恢复</sub>
     </td>
   </tr>
 </table>
@@ -194,9 +244,9 @@
 
 ## 📋 环境要求
 
-- **Node.js** 18+
-- **pnpm** 10+
-- **Windows / macOS**（打包需使用目标平台运行：Windows 打 NSIS，macOS 打 DMG/ZIP）
+- **Node.js**：建议使用 22.18+，兼顾 Vite 7、原生 TypeScript 测试与 `node:sqlite` 的运行要求
+- **pnpm**：项目声明版本为 10.33.2
+- **Windows / macOS / Linux**：建议在目标系统打包，分别生成 NSIS 安装程序、DMG 和 AppImage / DEB
 
 ## ⚡ 快速开始
 
@@ -207,6 +257,9 @@ pnpm install
 # 启动开发环境（同时启动 Electron 主进程 + Vite 渲染进程）
 pnpm run dev
 
+# 单独检查 TypeScript / Vue 类型
+pnpm run typecheck
+
 # 类型检查 + 构建
 pnpm run build
 
@@ -215,19 +268,36 @@ pnpm run dist:win
 
 # 打包 macOS 安装包（在 macOS 上运行）
 pnpm run dist:mac
+
+# 打包 Linux 安装包（在 Linux 上运行）
+pnpm run build
+pnpm exec electron-builder --linux --publish never
 ```
 
-macOS 产物为 ad-hoc 签名、未公证的 `.dmg` / `.zip`，适合内部安装测试；正式分发给普通用户需要配置 Apple Developer 证书与 notarization。
+安装包默认输出到 `dist/`。macOS 当前目标为 `.dmg`，使用 ad-hoc 签名且未公证；正式分发时需配置 Developer ID 签名与公证。`dist:mac` 完成后会清理展开的应用目录和辅助文件，只保留最近三个版本的 DMG。
 
-## 🍎 macOS 自动打包
+常用验证命令：
+
+```bash
+pnpm test                        # 主要功能回归
+pnpm test:skill-policy           # Skill 选择、预设与内容加载
+pnpm test:reference-blueprint    # 拆书创建与参考计划
+pnpm test:game-progression       # 游戏属性和章节数值账本
+pnpm test:equipment-generator    # 原创装备、技能与成长位阶
+pnpm test:reliability            # 备份与工作区同步
+```
+
+## 📦 自动打包与发布
 
 仓库内置 GitHub Actions 工作流 `.github/workflows/release.yml`：
 
 - `workflow_dispatch`：手动触发构建
 - `v*` tag push：版本标签触发构建
-- 相关打包配置变更的 PR：验证 macOS 打包
+- 相关打包配置变更的 PR：验证构建与各平台打包
 
-工作流分别在 `macos-26` 与 `macos-26-intel` runner 上构建 Apple Silicon (`arm64`) 和 Intel (`x64`) 产物，并上传到 Actions artifacts。macOS runner 版本以 GitHub-hosted runners 当前提供的镜像标签为准；当前配置使用 ad-hoc 签名且未做公证。如需正式发布，需补充 `CSC_LINK`、`CSC_KEY_PASSWORD`、`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID` 等 secrets 并启用 Developer ID 签名/公证流程。
+工作流先构建应用，再按矩阵打包 macOS、Windows、Linux 的 `arm64` 与 `x64` 产物，上传到 Actions artifacts。当前配置分别使用 `macos-latest`、`windows-latest`，以及 Linux 的 `ubuntu-latest` / `ubuntu-24.04-arm` runner。
+
+标签推送或手动运行在打包成功后创建 GitHub Release；手动运行会根据 `package.json` 版本复用或创建标签。PR 验证不创建 Release。实际流程见 [.github/workflows/release.yml](./.github/workflows/release.yml)。
 
 ### 🔑 配置 AI
 
@@ -278,7 +348,8 @@ mo-mai/
 │   │   ├── register-main-ipc.ts   # IPC 注册
 │   │   ├── window-manager.ts      # 窗口管理
 │   │   ├── workspace-store.ts     # SQLite 建表、迁移、快照读写
-│   │   └── knowledge-retrieval.ts # 章节调用前的本地知识检索
+│   │   ├── workspace-backups.ts   # 完整工作区备份与恢复
+│   │   └── game-progression-store.ts # 游戏目录、人物数值与章节记录
 │   ├── preload/                   # window.characterArc 桥接层
 │   └── shared/                    # 主进程/渲染层共享类型
 ├── renderer/
@@ -325,12 +396,13 @@ mo-mai/
 
 ## 🧰 内置 Skill 包
 
-应用当前在 `resources/skills/` 下内置 2 组、共 12 个定位清晰的 Skill。技能面板会显示中文名称、功能说明、适用阶段和适用题材；不限题材的 Skill 统一标记为“通用题材”。开发版与打包版使用同一套目录结构。
+应用当前在 `resources/skills/` 下内置 15 个 Skill。技能面板会显示中文名称、功能说明、适用阶段和适用题材；不限题材的 Skill 统一标记为“通用题材”。开发版与打包版使用同一套目录结构。
 
 | 来源 | 数量 | 代表 Skill | 说明 |
 |---|---:|---|---|
 | `community-skills` | 2 | `style-fingerprint`、`style-fusion` | 提取参考作品的风格特征，并转化为原创项目可执行的风格指南 |
 | `Distilled-Novel-Toolbox` | 10 | `novel-pacing`、`novel-worldbuilding`、`novel-character-design` | 覆盖题材、人设、世界观、节奏、情绪、爽点、语言、平台和合规 |
+| 独立写作 Skill | 3 | 仙侠升级流架构、人物驱动自然文风、网游数值战斗写作 | 按题材与创作任务补充正文方法 |
 
 ### `community-skills`
 
@@ -350,7 +422,15 @@ mo-mai/
 - `novel-pleasure-points`（爽点设计）
 - `novel-worldbuilding`（世界观与设定）
 
-> `resources/skills/<来源>/<skill-id>/SKILL.md` 会被自动扫描为内置 Skill；同级的 `scripts/` 等辅助目录不会被当成 Skill。
+### 独立写作 Skill
+
+- `我吃西红柿架构`（仙侠升级流架构）：用于仙侠与升级流的章节规划、力量逻辑和因果推进
+- `我吃西红柿笔锋`（人物驱动自然文风）：用于正文可读性、人物行动、对白与自然表达
+- `game-combat-writing`（网游数值战斗写作）：用于人物与怪物战斗的数值依据、资源变化与叙事节奏；网游题材的默认“正文创作”预设会加入此项
+
+可使用正文创作、正文润色、大纲设计、设定建设、审计检查五类快捷组合，也可在项目中自定义绑定。已有自定义组合继续遵循作者配置。
+
+> `resources/skills/<skill-id>/SKILL.md` 和 `resources/skills/<来源>/<skill-id>/SKILL.md` 均会自动扫描为内置 Skill。
 >
 > 还可以在全局 Skill 设置中导入独立 Skill 包，再由每个项目决定是否启用、适用阶段和默认预设。导入时会跳过同内容副本；同 ID 但内容更新时使用可回滚的安全替换。AI 只加载与当前任务相关的 Skill 章节，并在对话预览与回执中说明选中、跳过或回退原因。
 
@@ -361,24 +441,11 @@ mo-mai/
 - 📊 **数据库**：`<userData>/data/workspace.db`（SQLite）
 - 📦 **项目 Skill**：`<userData>/project-skills/<project-scope>`
 
-> 🔒 所有数据完全本地，不上传任何第三方服务。
+可在设置中的“存储与备份”立即创建备份或恢复整个工作区。恢复前会自动保存当前状态；旧版仅数据库备份可恢复数据库，但不包含封面、参考原文和导入 Skill。
+
+项目数据以本地文件为主。使用远程文本或图像模型时，应用会向你配置的服务发送提示词及任务所需资料；Codex CLI 模式同样通过本机 CLI 连接其服务。请根据作品资料的使用要求选择模型服务与输入范围。
 
 ## 🙏 鸣谢
 
 - [oh-story-claudecode](https://github.com/worldwonderer/oh-story-claudecode) — 提供了核心写作 Skills 的方法论与 prompt 工程基础
 - [dama-cyber/Distilled-Novel-Toolbox](https://github.com/dama-cyber/Distilled-Novel-Toolbox) — 提供了小说工作流与创作辅助方向的参考
-
-## 🔗 友情链接
-
-- [LINUX DO](https://linux.do) — 新的理想型社区
-
-
-## 📄 License
-
-[MIT](./LICENSE) © zhouyeshan
-
-<div align="center">
-
-<sub>如果这个项目对你有帮助，欢迎 Star ⭐ 支持一下</sub>
-
-</div>

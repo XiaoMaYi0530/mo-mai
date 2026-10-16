@@ -45,3 +45,9 @@ test('移动到空卷时插入到下一卷节点之前', () => {
   assert.deepEqual(ids(result), ['b', 'c', 'a', 'd'])
   assert.equal(result.find((item) => item.id === 'a')?.volumeId, 'v2')
 })
+
+test('批量移动到分卷末尾保持原顺序并统一更新分卷', () => {
+  const result = moveOutlineItemsToVolumeEnd(items, ['c', 'a'], 'v2', ['v1', 'v2'])
+  assert.deepEqual(ids(result), ['b', 'd', 'a', 'c'])
+  assert.deepEqual(result.slice(2).map((item) => item.volumeId), ['v2', 'v2'])
+})

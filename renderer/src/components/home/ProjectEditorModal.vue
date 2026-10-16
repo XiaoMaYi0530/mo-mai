@@ -17,6 +17,7 @@ const emit = defineEmits<{
     id: string
     title: string
     genre: string
+    premise: string
     novelLength: NovelLength
     cover: string
     targetPlatform: string
@@ -30,6 +31,7 @@ const PLATFORM_SUGGESTIONS = ['番茄小说', '起点中文网', '晋江文学�
 const form = reactive({
   title: '',
   genre: '',
+  premise: '',
   novelLength: 'long' as NovelLength,
   cover: '',
   targetPlatform: ''
@@ -40,6 +42,7 @@ const coverPreviewStyle = computed(() => resolveCoverStyle(form.cover))
 function syncFormFromProject(project: ProjectSummary | null): void {
   form.title = project?.title ?? ''
   form.genre = project?.genre ?? ''
+  form.premise = project?.premise ?? ''
   form.novelLength = project?.novelLength === 'short' ? 'short' : 'long'
   form.cover = project?.cover ?? ''
   form.targetPlatform = project?.targetPlatform ?? ''
@@ -87,6 +90,7 @@ function submitForm(): void {
     id: props.project.id,
     title: form.title,
     genre: form.genre,
+    premise: form.premise,
     novelLength: form.novelLength,
     cover: form.cover,
     targetPlatform: form.targetPlatform
@@ -142,6 +146,15 @@ function clearCover(): void {
             <n-input v-model:value="form.genre" placeholder="例如：科幻 / 赛博朋克" />
           </n-form-item>
         </div>
+
+        <n-form-item label="故事定位 / 小说简介">
+          <n-input
+            v-model:value="form.premise"
+            type="textarea"
+            :autosize="{ minRows: 4, maxRows: 10 }"
+            placeholder="故事主线、主角目标与核心悬念；可随时调整，不会覆盖分卷摘要。"
+          />
+        </n-form-item>
 
         <n-form-item label="目标平台">
           <div class="platform-editor">

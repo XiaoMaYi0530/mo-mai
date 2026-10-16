@@ -17,7 +17,17 @@ const handler: TaskHandler = {
   buildPrompt(input: PromptBuildInput) {
     const { context, capabilityPreamble, skillsBlock } = input
     const premise = String(context.projectPremise ?? '').trim()
-    const referenceStructure = String(context.referenceStructure ?? '').trim().slice(0, 8_000)
+    const referenceSources = Array.isArray(context.referenceSources)
+      ? context.referenceSources.slice(0, 3).map((source) => {
+          const entry = source && typeof source === 'object' ? source as Record<string, unknown> : {}
+          return {
+            title: String(entry.title ?? '').slice(0, 100),
+            role: String(entry.role ?? '').slice(0, 30),
+            purpose: String(entry.purpose ?? '').slice(0, 30),
+            findings: String(entry.findings ?? '').slice(0, 3_000)
+          }
+        })
+      : []
 
     return {
       system: `${capabilityPreamble.system}
@@ -33,6 +43,7 @@ const handler: TaskHandler = {
 1. 先提取 lockedFacts。凡用户已经明确的人名、身份、能力名称与机制、世界规则、关系、题材承诺，均视为不可改动的锁定事实。
 2. 四条路线都必须保留全部 lockedFacts。不得擅自换主角、改能力、换世界、颠覆用户想写的核心故事。
 3. 参考作品只可提供节奏、桥段功能、冲突升级方式等抽象经验；禁止复用专名、独有事件组合或逐章映射。
+3a. 严格按每本参考的用途取材，主参考决定结构基调；辅助参考只能补对应维度，不要把不同作品的剧情链拼接在一起。
 4. 四条路线必须在“因果发动机”上真正不同，至少拉开冲突来源、能力代价、关键关系、前期破局方法、长线升级机制中的三项；不能只换名称、职业或幕后黑手。
 5. 不要用“世界是假的、系统是敌人、穿越是实验、主角其实是反派”等廉价反转代替创新，除非用户原创方向明确要求。
 6. 每条路线应当能持续支撑长篇网文，并明确读者持续追读的承诺和同质化风险。
@@ -47,9 +58,8 @@ ${skillsBlock}`,
 【用户原创方向（最高优先级，不得改写其中的明确事实）】
 ${premise}
 
-【拆书结构研究（仅作抽象方法参考，可不采用）】
-参考作品：${String(context.referenceTitle ?? '')}
-${referenceStructure}
+【按用途分工的拆书研究（仅作抽象方法参考，可不采用）】
+${JSON.stringify(referenceSources, null, 2)}
 
 返回格式：
 {

@@ -25,6 +25,14 @@ contextBridge.exposeInMainWorld('characterArc', {
   /** 仅更新 app_settings 行，避免全量序列化工作区 */
   saveAppSettings: (payload: SaveAppSettingsRequest) =>
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_APP_SETTINGS, toIpcPayload(payload)),
+  gameRead: (projectId: string) => ipcRenderer.invoke('characterarc:game-read', projectId),
+  gameCommand: (request: unknown) => ipcRenderer.invoke('characterarc:game-command', toIpcPayload(request)),
+  gameExportTemplate: (projectId: string) => ipcRenderer.invoke('characterarc:game-export-template', projectId),
+  gameRollbackAiRun: (request: unknown) => ipcRenderer.invoke('characterarc:game-rollback-ai-run', toIpcPayload(request)),
+  gameSnapshot: (request: unknown) => ipcRenderer.invoke('characterarc:game-snapshot', toIpcPayload(request)),
+  gamePreview: (request: unknown) => ipcRenderer.invoke('characterarc:game-preview', toIpcPayload(request)),
+  gameSearch: (request: unknown) => ipcRenderer.invoke('characterarc:game-search', toIpcPayload(request)),
+  gameImportPreview: (projectId: string) => ipcRenderer.invoke('characterarc:game-import-preview', projectId),
 
   // ── 文件操作 ──
   /** 打开系统文件选择对话框，选取项目封面图片 */
@@ -171,6 +179,8 @@ contextBridge.exposeInMainWorld('characterArc', {
   },
   /** 保存封面图片到本地文件 */
   saveCoverImage: (payload: unknown) => ipcRenderer.invoke('characterarc:save-cover-image', toIpcPayload(payload)),
+  /** 将生成图片写入应用本地封面目录，并返回轻量文件地址 */
+  installProjectCover: (payload: unknown) => ipcRenderer.invoke('characterarc:install-project-cover', toIpcPayload(payload)),
 
   // ── 缩放控制 ──
   /** 设置渲染进程页面缩放比例 */
@@ -184,6 +194,9 @@ contextBridge.exposeInMainWorld('characterArc', {
   // ── 工作区同步 ──
   /** 广播工作区数据同步 */
   publishWorkspaceSync: (payload: unknown) => ipcRenderer.invoke('characterarc:workspace-sync-publish', toIpcPayload(payload)),
+  listWorkspaceBackups: () => ipcRenderer.invoke('characterarc:list-workspace-backups'),
+  createWorkspaceBackup: () => ipcRenderer.invoke('characterarc:create-workspace-backup'),
+  restoreWorkspaceBackup: (name: string) => ipcRenderer.invoke('characterarc:restore-workspace-backup', name),
 
   // ── 事件监听（返回清理函数，组件卸载时调用以移除监听） ──
   /** 监听工作区数据同步事件 */
