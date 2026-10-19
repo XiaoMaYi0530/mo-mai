@@ -1,4 +1,4 @@
-import { copyBackupChapters } from '../shared/backup-preview.ts'
+import { copyBackupChapters, copyBackupProjectChapters } from '../shared/backup-preview.ts'
 import assert from 'node:assert/strict'
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -140,6 +140,9 @@ test('备份目录预览与按章读取只读隔离，复制正文历史时生�
     db.exec("UPDATE chapters SET content='新的正文'")
     const catalog=await previewWorkspaceBackup(directory,saved.name)
     assert.equal(catalog.projects[0].chapters[0].volumeTitle,'第一卷')
+    const preview=await readBackupChapters(directory,saved.name,'p',['c'],false)
+    assert.equal(preview.chapters[0].content,'<p>原正文</p>')
+    assert.deepEqual(preview.versions,[])
     const selected=await readBackupChapters(directory,saved.name,'p',['c'])
     assert.equal(selected.chapters[0].content,'<p>原正文</p>');assert.equal(selected.versions[0].content,'历史正文')
     let id=0;const copied=copyBackupChapters(selected,'target',()=>`new-${++id}`)
@@ -150,4 +153,16 @@ test('备份目录预览与按章读取只读隔离，复制正文历史时生�
     await assert.rejects(previewWorkspaceBackup(directory,'../workspace.db'),/找不到/)
     await assert.rejects(readBackupChapters(directory,saved.name,'p',[]),/请选择/)
   } finally {db.close();await rm(directory,{recursive:true,force:true})}
+})
+
+test('恢复新作品保留选中章节的原分卷顺序、名称和卷信息，历史版本重新关联',()=>{
+  const selection={volumes:[{id:'v2',title:'第二卷',wordTarget:'50000',summary:'卷二目标'},{id:'v1',title:'第一卷',wordTarget:'30000',summary:'卷一目标'},{id:'empty',title:'未选卷',wordTarget:'',summary:''}],chapters:[{id:'c1',volumeId:'v1',title:'甲',status:'final',content:'正文甲'},{id:'c2',volumeId:'v2',title:'乙',status:'review',content:'正文乙'}],versions:[{id:'h1',chapterId:'c1',content:'旧稿'}]}
+  let seq=0;const restored=copyBackupProjectChapters(selection,()=>`id-${++seq}`)
+  assert.deepEqual(restored.outlineVolumes.map(v=>v.title),['第二卷','第一卷'])
+  assert.equal(restored.outlineVolumes[0].summary,'卷二目标')
+  assert.deepEqual(restored.chapters.map(c=>c.content),['正文乙','正文甲'])
+  assert.equal(restored.chapters[0].volumeId,restored.outlineVolumes[0].id)
+  assert.equal(restored.chapterVersions[0].chapterId,restored.chapters[1].id)
+  assert.equal(restored.chapters[1].status,'draft')
+  assert.equal(selection.chapters[0].id,'c1')
 })

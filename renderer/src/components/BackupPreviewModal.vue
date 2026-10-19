@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { NModal, NCard, NButton, NSelect, useMessage } from 'naive-ui'
 import { useAppStore } from '@/stores/app'
 import { getPlainTextFromEditorContent } from '@/features/chapters/editorContent'
-import { copyBackupChapters, type BackupCatalog } from '@shared/backup-preview'
+import { copyBackupProjectChapters, type BackupCatalog } from '@shared/backup-preview'
 const props = defineProps<{ show: boolean; name: string }>()
 const emit = defineEmits<{ 'update:show': [value: boolean]; restoreAll: [] }>()
 const store = useAppStore(), message = useMessage()
@@ -20,6 +20,8 @@ watch(() => [props.show, props.name], async () => {
   const token = ++loadToken
   ++previewToken; content.value = ''; reading.value = false
   if (!props.show) return
+  if (pending.value && !store.persistenceError && !store.isPersistencePending && !store.isPersisting) pending.value = null
+  if (pending.value) return
   catalog.value = { projects: [] }; selectedIds.value = []; sourceId.value = ''; error.value = ''; pending.value = null
   targetId.value = store.selectedProjectId; volumeId.value = targetVolumes.value[0]?.id ?? ''; loading.value = true
   try {
@@ -36,7 +38,7 @@ watch(previewId, async id => {
   if (!id) return
   reading.value = true
   try {
-    const response = await window.characterArc.readBackupChapters({ name: props.name, projectId: sourceId.value, chapterIds: [id] })
+    const response = await window.characterArc.readBackupChapters({ name: props.name, projectId: sourceId.value, chapterIds: [id], includeVersions: false })
     if (token !== previewToken) return
     if (!response.success || !response.result) throw new Error(response.error || '读取章节失败')
     content.value = getPlainTextFromEditorContent(response.result.chapters[0].content) || '（空白章节）'
@@ -53,20 +55,25 @@ async function restore(asProject: boolean) {
       if (!response.success || !response.result) throw new Error(response.error || '读取章节失败')
       let projectId = destination
       if (asProject) {
-        const volumeId = crypto.randomUUID()
-        const copied = copyBackupChapters(response.result, volumeId, () => crypto.randomUUID())
+        const copied = copyBackupProjectChapters(response.result, () => crypto.randomUUID())
         projectId = store.createProjectWorkspace({ project: { title: `${source.value?.title || '恢复作品'}（备份章节）`, genre: '未分类', premise: '从本地备份恢复的章节与历史版本。', novelLength: 'long', wordCount: '', cover: '' },
-          outlineVolumes: [{ id: volumeId, title: '恢复章节', wordTarget: '', summary: '' }], chapters: copied.chapters, chapterVersions: copied.chapterVersions }, undefined, false)
+          ...copied }, undefined, false)
       } else store.appendBackupChapters(destination, volume, response.result)
       pending.value = { projectId, count: response.result.chapters.length, open: asProject }
     }
     await store.persistWorkspace()
     if (store.persistenceError) throw new Error(`章节已加入当前工作区，保存失败，请重试保存：${store.persistenceError}`)
     const saved = pending.value!
+    pending.value = null
     message.success(`已恢复 ${saved.count} 章及其历史版本。`)
     if (saved.open) store.openProject(saved.projectId)
     emit('update:show', false)
   } catch (e) { error.value = String(e) } finally { busy.value = false }
+}
+function closeKeepingPending() {
+  if (busy.value) return
+  if (pending.value) message.warning('恢复内容已保留在当前工作区内存中，尚未确认保存。请在主界面重试保存，成功前不要退出应用。')
+  emit('update:show', false)
 }
 </script>
 <template>
@@ -87,7 +94,7 @@ async function restore(asProject: boolean) {
         <div class="destinations"><n-select v-model:value="targetId" :options="store.projects.map(p => ({label:p.title,value:p.id}))" placeholder="目标作品" /><n-select v-model:value="volumeId" :options="targetVolumes.map(v => ({label:v.title,value:v.id}))" placeholder="目标分卷" /></div>
       </fieldset>
       <template #footer><div class="actions">
-        <n-button :disabled="busy || !!pending" @click="emit('update:show',false)">关闭</n-button>
+        <n-button :disabled="busy" @click="closeKeepingPending">{{ pending ? '保留内容并退出' : '关闭' }}</n-button>
         <n-button :disabled="busy || !!pending || loading" @click="emit('restoreAll')">恢复整个工作区…</n-button>
         <n-button v-if="pending" type="primary" :loading="busy" @click="restore(false)">重试保存</n-button>
         <template v-else>

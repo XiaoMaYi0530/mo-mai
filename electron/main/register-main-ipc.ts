@@ -1368,10 +1368,10 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       return { success: true, result: await previewWorkspaceBackup(getWorkspaceDirPath(), name) }
     } catch (error) { return { success: false, error: String(error) } }
   })
-  ipcMain.handle('characterarc:read-backup-chapters', async (_event, input: { name: string; projectId: string; chapterIds: string[] }) => {
+  ipcMain.handle('characterarc:read-backup-chapters', async (_event, input: { name: string; projectId: string; chapterIds: string[]; includeVersions?: boolean }) => {
     try {
       if (!input || typeof input.name !== 'string' || typeof input.projectId !== 'string') throw new Error('备份请求无效')
-      return { success: true, result: await readBackupChapters(getWorkspaceDirPath(), input.name, input.projectId, input.chapterIds) }
+      return { success: true, result: await readBackupChapters(getWorkspaceDirPath(), input.name, input.projectId, input.chapterIds, input.includeVersions !== false) }
     } catch (error) { return { success: false, error: String(error) } }
   })
 

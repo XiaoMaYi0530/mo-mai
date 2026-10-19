@@ -345,3 +345,19 @@ test('技能未命中仍耗蓝；蓝量不足或未学技能时不写入部分�
   assert.deepEqual(readGameProject(db,'p'),before)
   db.close()
 })
+
+test('长技能名和人物 ID 的战斗记录能够归档回读',()=>{
+  const {db,state,command}=combatFixture()
+  const attacker='a'.repeat(120), defender='b'.repeat(120)
+  db.prepare('INSERT INTO characters VALUES (?,?,?)').run(attacker,'p','主角')
+  db.prepare('INSERT INTO characters VALUES (?,?,?)').run(defender,'p','怪物')
+  state.data.characters[0].characterId=attacker;state.data.characters[1].characterId=defender
+  state.data.assets[0].name='雷'.repeat(120)
+  db.prepare('UPDATE game_progression SET data_json=? WHERE project_id=?').run(JSON.stringify(state.data),'p')
+  const next=applyGameCommand(db,'p',state.revision,{...command,attackerId:attacker,defenderId:defender})
+  assert.doesNotThrow(()=>validateImportedGameProject(db,'p',structuredClone(next.data)))
+  assert.ok(next.data.events.every(e=>e.narrativeNote.length<=240))
+  const legacy=structuredClone(next.data);legacy.events[0].narrativeNote='旧版战斗备注'.repeat(100)
+  assert.equal(validateImportedGameProject(db,'p',legacy).events[0].narrativeNote.length,240)
+  db.close()
+})

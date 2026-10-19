@@ -433,9 +433,11 @@ export function validateImportedGameProject(db: DatabaseSync, projectId: string,
     }
     if ((event.aiRunId !== undefined && (typeof event.aiRunId !== 'string' || event.aiRunId.length > 240))
       || (event.aiChangeKey !== undefined && (typeof event.aiChangeKey !== 'string' || event.aiChangeKey.length > 240))
-      || (event.narrativeNote !== undefined && (typeof event.narrativeNote !== 'string' || event.narrativeNote.length > 240))) {
+      || (event.narrativeNote !== undefined && typeof event.narrativeNote !== 'string')) {
       throw new Error('归档中的 AI 运行标识或剧情备注无效。')
     }
+    // Earlier combat records could exceed the writer's 240-character note limit.
+    if (event.narrativeNote) event.narrativeNote = event.narrativeNote.slice(0, 240)
     if (!event.operation || typeof event.operation !== 'object'
       || !['level-up', 'allocate', 'acquire', 'equip', 'unequip', 'activate-title', 'deactivate-title', 'activate-special', 'deactivate-special', 'learn-skill', 'forget-skill', 'use-skill', 'take-damage', 'restore-resource', 'rest', 'consume']
         .includes(event.operation.kind)) throw new Error('归档中的数值操作类型无效。')
@@ -503,7 +505,7 @@ export function applyGameCommand(
         data.events.push({ id: randomUUID(), characterId, chapterId: command.chapterId, chapterIndex: index,
           order: Math.max(0, ...data.events.filter(e => e.chapterId === command.chapterId).map(e => e.order)) + 1,
           status: 'draft', operation, source: 'manual', combatActionId: actionId, combatActionKey: JSON.stringify(command),
-          narrativeNote: note, createdAt: new Date().toISOString() })
+          narrativeNote: note.slice(0, 240), createdAt: new Date().toISOString() })
       }
       if (command.skillId) append(command.attackerId, { kind: 'use-skill', assetId: command.skillId })
       if (resolution.damage) append(command.defenderId, { kind: 'take-damage', amount: resolution.damage })

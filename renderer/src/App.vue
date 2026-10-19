@@ -146,6 +146,14 @@ function toggleDarkMode(): void {
   })
 }
 
+async function retryWorkspaceSave() {
+  try {
+    await appStore.persistWorkspace()
+    if (appStore.persistenceError) message.error(appStore.persistenceError)
+    else message.success('工作区已保存')
+  } catch (error) { message.error(String(error)) }
+}
+
 // Ctrl+S 全局保存快捷键
 async function handleGlobalKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -213,6 +221,7 @@ onBeforeUnmount(() => {
             <div v-if="appStore.persistenceError" class="app-error-banner">
               <strong>本地数据读写异常</strong>
               <span>{{ appStore.persistenceError }}</span>
+              <button :disabled="appStore.isPersisting" @click="retryWorkspaceSave">重试保存工作区</button>
             </div>
             <div v-if="!appStore.hasHydrated" class="app-loading">
               <n-spin size="large" />

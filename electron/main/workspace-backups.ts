@@ -255,7 +255,7 @@ export async function previewWorkspaceBackup(workspaceDir: string, name: string)
   } finally { db.close() }
 }
 
-export async function readBackupChapters(workspaceDir: string, name: string, projectId: string, chapterIds: string[]): Promise<import('../shared/backup-preview').BackupChapterSelection> {
+export async function readBackupChapters(workspaceDir: string, name: string, projectId: string, chapterIds: string[], includeVersions = true): Promise<import('../shared/backup-preview').BackupChapterSelection> {
   if (!projectId || !Array.isArray(chapterIds) || !chapterIds.length || chapterIds.some(id => typeof id !== 'string' || !id)) throw new Error('请选择要恢复的章节')
   const db = await openBackupForPreview(workspaceDir, name)
   try {
@@ -263,8 +263,11 @@ export async function readBackupChapters(workspaceDir: string, name: string, pro
     const ids = db.prepare('SELECT id FROM chapters WHERE project_id=? ORDER BY sort_order,rowid').all(projectId).map(row => String(row.id)).filter(id => wanted.has(id))
     if (ids.length !== wanted.size) throw new Error('所选章节不存在于此备份作品中')
     const chapter = db.prepare('SELECT id,volume_id AS volumeId,title,summary,status,word_target AS wordTarget,content FROM chapters WHERE project_id=? AND id=?')
-    const versions = db.prepare('SELECT id,chapter_id AS chapterId,title,summary,status,word_target AS wordTarget,content,created_at AS createdAt FROM chapter_versions WHERE project_id=? AND chapter_id=? ORDER BY created_at DESC,rowid DESC')
+    const versions = includeVersions ? db.prepare('SELECT id,chapter_id AS chapterId,title,summary,status,word_target AS wordTarget,content,created_at AS createdAt FROM chapter_versions WHERE project_id=? AND chapter_id=? ORDER BY created_at DESC,rowid DESC') : null
+    const columns = new Set(db.prepare('PRAGMA table_info(outline_volumes)').all().map(c => String(c.name)))
+    const volumes = includeVersions ? db.prepare(`SELECT id,title,${columns.has('summary') ? 'summary' : "''"} AS summary,${columns.has('word_target') ? 'word_target' : "''"} AS wordTarget FROM outline_volumes WHERE project_id=? ORDER BY ${columns.has('sort_order') ? 'sort_order,' : ''}rowid`).all(projectId) : []
     return { chapters: ids.map(id => chapter.get(projectId,id)) as unknown as import('../shared/backup-preview').BackupChapter[],
-      versions: ids.flatMap(id => versions.all(projectId,id)) as unknown as import('../shared/backup-preview').BackupChapterVersion[] }
+      versions: versions ? ids.flatMap(id => versions.all(projectId,id)) as unknown as import('../shared/backup-preview').BackupChapterVersion[] : [],
+      volumes: volumes as unknown as import('../shared/backup-preview').BackupVolume[] }
   } finally { db.close() }
 }
