@@ -1,5 +1,5 @@
 import { formatCombatRulesForWriting } from '../shared/game-combat.ts'
-import { DEFAULT_COMBAT_RULES, assertCombatRules, assertPrecision, resolveCombat, rulesAtChapter, type CombatInput, type CombatRules } from '../shared/game-combat.ts'
+import { DEFAULT_COMBAT_RULES, assertCombatRules, assertPrecision, combatActionInput, resolveCombat, rulesAtChapter, type CombatInput, type CombatRules } from '../shared/game-combat.ts'
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { assertGameTierRules, normalizeGameTierRules, type GameTierRules } from '../shared/game-progression-tiers.ts'
@@ -29,7 +29,7 @@ import {
 
 export type GameCommand =
   | { kind: 'configure'; enabled?: boolean; pointsPerLevel?: number; derivedRules?: GameDerivedRules; tierRules?: GameTierRules; stats?: GameStatDefinition[]; slots?: GameSlotDefinition[] }
-  | { kind: 'combat'; chapterId: string; attackerId: string; defenderId: string; input: CombatInput }
+  | { kind: 'combat'; chapterId: string; attackerId: string; defenderId: string; input: CombatInput; skillId?: string; actionId?: string }
   | { kind: 'remove-rule-version'; versionId: string }
   | { kind: 'version-rules'; chapterId: string; derivedRules: GameDerivedRules; flatPrecision: number; percentPrecision: number; combatRules: CombatRules }
   | { kind: 'set-slot-enabled'; slotId: string; enabled: boolean }
@@ -474,19 +474,41 @@ export function applyGameCommand(
   assertId(projectId, '作品 ID')
   if (!db.prepare('SELECT 1 FROM projects WHERE id = ?').get(projectId)) throw new Error('作品不存在。')
   const previous = readGameProject(db, projectId)
+  if (command.kind === 'combat' && command.actionId) {
+    assertId(command.actionId, '战斗操作 ID')
+    const duplicate = previous.data.events.find(e => e.combatActionId === command.actionId)
+    if (duplicate) {
+      if (duplicate.combatActionKey !== JSON.stringify(command)) throw new Error('同一次战斗的参数已变化，请发起新的攻击。')
+      return previous
+    }
+  }
   if (previous.revision !== expectedRevision) throw new Error('数值档案已在其他窗口更新，请刷新后重试。')
   const data = structuredClone(previous.data)
-  if (command.kind === 'combat') {
-    const index = chapterIndexForGame(db, projectId, command.chapterId)
-    const rules = rulesAtChapter(data, index)
-    const resolution = resolveCombat(gameSnapshot(data, command.attackerId, index, command.chapterId),
-      gameSnapshot(data, command.defenderId, index, command.chapterId), rules.combatRules ?? DEFAULT_COMBAT_RULES, command.input)
-    if (!resolution.damage) throw new Error('本次没有伤害，无需扣血。')
-    command = { kind: 'stage', characterId: command.defenderId, chapterId: command.chapterId,
-      operation: { kind: 'take-damage', amount: resolution.damage }, source: 'manual',
-      narrativeNote: `战斗试算 ${command.attackerId} → ${command.defenderId}；${command.input.damageType}；命中点数 ${command.input.hitRoll}；暴击点数 ${command.input.criticalRoll}；伤害 ${resolution.damage}` }
-  }
   switch (command.kind) {
+    case 'combat': {
+      if (!data.enabled) throw new Error('请先启用本作品的游戏数值功能。')
+      const index = chapterIndexForGame(db, projectId, command.chapterId)
+      const chapter = db.prepare('SELECT status FROM chapters WHERE project_id=? AND id=?').get(projectId, command.chapterId) as { status: string }
+      if (chapter.status === 'final') throw new Error('该章已定稿，请先退回草稿。')
+      const attacker = gameSnapshot(data, command.attackerId, index, command.chapterId)
+      const input = combatActionInput(data, attacker, command.input, command.skillId)
+      const rules = rulesAtChapter(data, index)
+      const resolution = resolveCombat(attacker, gameSnapshot(data, command.defenderId, index, command.chapterId), rules.combatRules ?? DEFAULT_COMBAT_RULES, input)
+      if (!resolution.damage && !command.skillId) throw new Error('本次没有伤害，无需扣血。')
+      const actionId = command.actionId || randomUUID()
+      const skill = data.assets.find(a => a.id === command.skillId)
+      const note = `${skill?.name || '普通攻击'} ${command.attackerId} → ${command.defenderId}；命中点数 ${input.hitRoll}；暴击点数 ${input.criticalRoll}；伤害 ${resolution.damage}`
+      const append = (characterId: string, operation: GameOperation) => {
+        previewGameOperation(data, characterId, index, command.chapterId, operation)
+        data.events.push({ id: randomUUID(), characterId, chapterId: command.chapterId, chapterIndex: index,
+          order: Math.max(0, ...data.events.filter(e => e.chapterId === command.chapterId).map(e => e.order)) + 1,
+          status: 'draft', operation, source: 'manual', combatActionId: actionId, combatActionKey: JSON.stringify(command),
+          narrativeNote: note, createdAt: new Date().toISOString() })
+      }
+      if (command.skillId) append(command.attackerId, { kind: 'use-skill', assetId: command.skillId })
+      if (resolution.damage) append(command.defenderId, { kind: 'take-damage', amount: resolution.damage })
+      break
+    }
     case 'configure': {
       if (command.enabled !== undefined) data.enabled = Boolean(command.enabled)
       if (command.pointsPerLevel !== undefined) {
@@ -717,7 +739,8 @@ export function applyGameCommand(
       const event = data.events.find((entry) => entry.id === command.eventId)
       if (!event) throw new Error('变更记录不存在。')
       if (event.status === 'committed') throw new Error('已确认的历史不能直接撤销，请创建后续章节中的反向变更。')
-      data.events = data.events.filter((entry) => entry.id !== command.eventId)
+      if (event.combatActionId && data.events.some(e => e.combatActionId === event.combatActionId && e.status === 'committed')) throw new Error('本次战斗已有确认记录，不能撤销。')
+      data.events = data.events.filter((entry) => event.combatActionId ? entry.combatActionId !== event.combatActionId : entry.id !== command.eventId)
       break
     }
     case 'commit-chapter': {

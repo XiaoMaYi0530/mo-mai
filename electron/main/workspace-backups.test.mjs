@@ -1,3 +1,4 @@
+import { copyBackupChapters } from '../shared/backup-preview.ts'
 import assert from 'node:assert/strict'
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,7 +9,7 @@ import {
   applyPendingWorkspaceRestore,
   createWorkspaceBackup,
   listWorkspaceBackups,
-  stageWorkspaceRestore
+  stageWorkspaceRestore, previewWorkspaceBackup, readBackupChapters
 } from './workspace-backups.ts'
 
 test('complete SQLite backup can be previewed and restored after restart', async () => {
@@ -123,4 +124,30 @@ test('old database-only backups remain selectable and do not replace current ass
   } finally {
     await rm(userData, { recursive: true, force: true })
   }
+})
+
+test('备份目录预览与按章读取只读隔离，复制正文历史时生成新身份', async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'mo-mai-select-backup-'))
+  const db=new DatabaseSync(join(directory,'workspace.db'))
+  try {
+    db.exec(`CREATE TABLE projects(id TEXT PRIMARY KEY,title TEXT);INSERT INTO projects VALUES('p','备份作品');
+      CREATE TABLE outline_volumes(id TEXT,project_id TEXT,title TEXT);INSERT INTO outline_volumes VALUES('v','p','第一卷');
+      CREATE TABLE chapters(id TEXT,project_id TEXT,volume_id TEXT,title TEXT,summary TEXT,status TEXT,word_target TEXT,content TEXT,sort_order INTEGER);
+      INSERT INTO chapters VALUES('c','p','v','旧章节','摘要','final','2000','<p>原正文</p>',0);
+      CREATE TABLE chapter_versions(id TEXT,project_id TEXT,chapter_id TEXT,title TEXT,summary TEXT,status TEXT,word_target TEXT,content TEXT,created_at TEXT);
+      INSERT INTO chapter_versions VALUES('h','p','c','旧标题','','draft','2000','历史正文','2026-01-01');`)
+    const saved=await createWorkspaceBackup(db,directory,true)
+    db.exec("UPDATE chapters SET content='新的正文'")
+    const catalog=await previewWorkspaceBackup(directory,saved.name)
+    assert.equal(catalog.projects[0].chapters[0].volumeTitle,'第一卷')
+    const selected=await readBackupChapters(directory,saved.name,'p',['c'])
+    assert.equal(selected.chapters[0].content,'<p>原正文</p>');assert.equal(selected.versions[0].content,'历史正文')
+    let id=0;const copied=copyBackupChapters(selected,'target',()=>`new-${++id}`)
+    assert.equal(copied.chapters[0].status,'draft');assert.equal(copied.chapters[0].volumeId,'target');assert.equal(copied.chapterVersions[0].chapterId,copied.chapters[0].id)
+    assert.notEqual(copied.chapters[0].id,'c');assert.equal(selected.chapters[0].status,'final')
+    assert.equal(db.prepare('SELECT content FROM chapters').get().content,'新的正文')
+    await assert.rejects(readBackupChapters(directory,saved.name,'wrong',['c']),/不存在/)
+    await assert.rejects(previewWorkspaceBackup(directory,'../workspace.db'),/找不到/)
+    await assert.rejects(readBackupChapters(directory,saved.name,'p',[]),/请选择/)
+  } finally {db.close();await rm(directory,{recursive:true,force:true})}
 })

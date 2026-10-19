@@ -665,6 +665,8 @@ declare global {
         success: boolean
         error?: string
       }>
+      previewWorkspaceBackup: (name: string) => Promise<{ success: boolean; result?: import('../../electron/shared/backup-preview').BackupCatalog; error?: string }>
+      readBackupChapters: (input: { name: string; projectId: string; chapterIds: string[] }) => Promise<{ success: boolean; result?: import('../../electron/shared/backup-preview').BackupChapterSelection; error?: string }>
       listWorkspaceBackups: () => Promise<{
         success: boolean
         backups?: Array<{ name: string; createdAt: string; sizeBytes: number; projectTitles: string[]; assetMode: 'complete' | 'database-only' }>

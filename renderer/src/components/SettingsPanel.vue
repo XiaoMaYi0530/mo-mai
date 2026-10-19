@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BackupPreviewModal from './BackupPreviewModal.vue'
 import ReferenceUsageEditor from './ReferenceUsageEditor.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { Archive, FileJson, FileStack, FileText, Lightbulb, Moon, Network, PenTool, Save, Upload, Users } from 'lucide-vue-next'
@@ -22,6 +23,7 @@ const message = useMessage()
 const dialog = useDialog()
 const backups = ref<Array<{ name: string; createdAt: string; sizeBytes: number; projectTitles: string[]; assetMode: 'complete' | 'database-only' }>>([])
 const selectedBackupName = ref('')
+const showBackupPreview = ref(false)
 const isManagingBackups = ref(false)
 
 async function refreshBackups(): Promise<void> {
@@ -322,6 +324,7 @@ watch(
 </script>
 
 <template>
+  <BackupPreviewModal v-model:show="showBackupPreview" :name="selectedBackupName" @restore-all="confirmRestoreBackup" />
   <section class="settings-panel">
     <div class="section-head">
       <div>
@@ -366,7 +369,7 @@ watch(
             :options="backups.map((item) => ({ label: `${new Date(item.createdAt).toLocaleString('zh-CN')} · ${item.projectTitles.length} 部作品 · ${item.assetMode === 'complete' ? '完整' : '仅数据库'}`, value: item.name }))"
             placeholder="选择备份"
           />
-          <n-button :disabled="!selectedBackupName || isManagingBackups" @click="confirmRestoreBackup">预览并恢复</n-button>
+          <n-button :disabled="!selectedBackupName || isManagingBackups" @click="showBackupPreview = true">预览并恢复</n-button>
         </div>
         <div class="setting-row">
           <div>

@@ -236,3 +236,35 @@ export async function applyPendingWorkspaceRestore(workspaceDir: string): Promis
     })
   }
 }
+
+async function openBackupForPreview(workspaceDir: string, name: string): Promise<DatabaseSync> {
+  if (!BACKUP_NAME.test(name) || !(await backupNames(workspaceDir)).includes(name)) throw new Error('找不到所选本地备份')
+  const path = name.endsWith('.backup') ? join(backupDir(workspaceDir), name, 'workspace.db') : join(backupDir(workspaceDir), name)
+  if (!(await lstat(path)).isFile()) throw new Error('备份数据库不是普通文件')
+  return new DatabaseSync(path, { readOnly: true })
+}
+
+export async function previewWorkspaceBackup(workspaceDir: string, name: string): Promise<import('../shared/backup-preview').BackupCatalog> {
+  const db = await openBackupForPreview(workspaceDir, name)
+  try {
+    const projects = db.prepare('SELECT id, title FROM projects ORDER BY rowid').all() as Array<{ id: string; title: string }>
+    const chapters = db.prepare(`SELECT c.project_id AS projectId,c.id,c.title,c.volume_id AS volumeId,
+      COALESCE(v.title,'未分卷') AS volumeTitle,length(c.content) AS characters FROM chapters c
+      LEFT JOIN outline_volumes v ON v.id=c.volume_id AND v.project_id=c.project_id ORDER BY c.sort_order,c.rowid`).all() as Array<import('../shared/backup-preview').BackupCatalog['projects'][number]['chapters'][number] & { projectId: string }>
+    return { projects: projects.map(p => ({ ...p, chapters: chapters.filter(c => c.projectId === p.id).map(({ projectId: _, ...c }) => c) })) }
+  } finally { db.close() }
+}
+
+export async function readBackupChapters(workspaceDir: string, name: string, projectId: string, chapterIds: string[]): Promise<import('../shared/backup-preview').BackupChapterSelection> {
+  if (!projectId || !Array.isArray(chapterIds) || !chapterIds.length || chapterIds.some(id => typeof id !== 'string' || !id)) throw new Error('请选择要恢复的章节')
+  const db = await openBackupForPreview(workspaceDir, name)
+  try {
+    const wanted = new Set(chapterIds)
+    const ids = db.prepare('SELECT id FROM chapters WHERE project_id=? ORDER BY sort_order,rowid').all(projectId).map(row => String(row.id)).filter(id => wanted.has(id))
+    if (ids.length !== wanted.size) throw new Error('所选章节不存在于此备份作品中')
+    const chapter = db.prepare('SELECT id,volume_id AS volumeId,title,summary,status,word_target AS wordTarget,content FROM chapters WHERE project_id=? AND id=?')
+    const versions = db.prepare('SELECT id,chapter_id AS chapterId,title,summary,status,word_target AS wordTarget,content,created_at AS createdAt FROM chapter_versions WHERE project_id=? AND chapter_id=? ORDER BY created_at DESC,rowid DESC')
+    return { chapters: ids.map(id => chapter.get(projectId,id)) as unknown as import('../shared/backup-preview').BackupChapter[],
+      versions: ids.flatMap(id => versions.all(projectId,id)) as unknown as import('../shared/backup-preview').BackupChapterVersion[] }
+  } finally { db.close() }
+}

@@ -174,6 +174,8 @@ export type GameOperation =
   | { kind: 'consume'; assetId: string; quantity: number }
 
 export interface GameEvent {
+  combatActionId?: string
+  combatActionKey?: string
   id: string
   characterId: string
   chapterId: string

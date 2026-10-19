@@ -194,6 +194,8 @@ contextBridge.exposeInMainWorld('characterArc', {
   // ── 工作区同步 ──
   /** 广播工作区数据同步 */
   publishWorkspaceSync: (payload: unknown) => ipcRenderer.invoke('characterarc:workspace-sync-publish', toIpcPayload(payload)),
+  previewWorkspaceBackup: (name: string) => ipcRenderer.invoke('characterarc:preview-workspace-backup', name),
+  readBackupChapters: (input: unknown) => ipcRenderer.invoke('characterarc:read-backup-chapters', toIpcPayload(input)),
   listWorkspaceBackups: () => ipcRenderer.invoke('characterarc:list-workspace-backups'),
   createWorkspaceBackup: () => ipcRenderer.invoke('characterarc:create-workspace-backup'),
   restoreWorkspaceBackup: (name: string) => ipcRenderer.invoke('characterarc:restore-workspace-backup', name),

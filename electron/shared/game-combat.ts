@@ -80,3 +80,14 @@ export function formatCombatRulesForWriting(data: GameProjectData, chapterIndex:
   if (!rules.enabled) return '本章未启用战斗判定：面板值不等于实际命中、闪避概率或伤害；不得自行发明公式、伤害或判定点数。'
   return `本章战斗规则：命中率=限制(${rules.baseHit}+命中-最小(闪避,${rules.dodgeCap}),${rules.minHit},${rules.maxHit})%；暴击率=最小(暴击,${rules.criticalCap})%；伤害=向下取整((攻击或法强×技能倍率+基础伤害)×${rules.defenseScale}/(${rules.defenseScale}+防御或魔抗)×暴击时${rules.criticalMultiplier}、否则1)。每秒行动次数=最小(速度/${rules.baseSpeed}×${rules.baseActionsPerSecond},${rules.maxActionsPerSecond})。判定点数由作者明确填写，点数小于概率才成功；不得擅自生成点数或把概率写成必然结果。只使用已确认的战斗结果；魔法消耗、冷却和道具另行记录。`
 }
+
+/** Derive skill parameters from the saved catalogue; never trust client damage or costs. */
+export function combatActionInput(data: GameProjectData, attacker: GameSnapshot, input: CombatInput, skillId?: string): CombatInput {
+  if (!skillId) return input
+  const asset = data.assets.find(a => a.id === skillId && a.kind === 'skill')
+  if (!asset || !attacker.learnedSkillIds.includes(skillId)) throw new Error('人物尚未学习该技能。')
+  const skill = asset.skill
+  if (!skill || skill.outcome !== 'damage' || !['attack', 'spellPower'].includes(skill.scalingStatId)) throw new Error('此技能不支持直接伤害试算，请使用攻击或法强加成的伤害技能。')
+  if (attacker.currentResources.mana < skill.manaCost) throw new Error(`魔法值不足，释放“${asset.name}”需要 ${skill.manaCost} 点。`)
+  return { ...input, damageType: skill.scalingStatId === 'attack' ? 'physical' : 'magic', power: skill.powerMultiplier, flat: skill.flatPower }
+}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
-import { emptyGameCharacter, gameSnapshot } from '../shared/game-progression.ts'
+import { completeGameSkillDetails, emptyGameCharacter, gameSnapshot } from '../shared/game-progression.ts'
 import { DEFAULT_PERMISSION_MATRIX } from '../shared/assistant-runtime.ts'
 import { applyGameCommand, buildGameWritingContext, chapterIndexForGame, clearAiDraftEventsForChapter, commitGameEventsForFinalChapters, initGameProgressionSchema, readGameProject, rollbackAiGameRun, validateImportedGameProject } from './game-progression-store.ts'
 
@@ -305,5 +305,43 @@ test('已有数值事件的规则不能被修改或删除',()=>{
   state=applyGameCommand(db,'p',state.revision,{kind:'stage',characterId:'hero',chapterId:'c1',operation:{kind:'take-damage',amount:1}})
   assert.throws(()=>applyGameCommand(db,'p',state.revision,command),/数值记录/)
   assert.throws(()=>applyGameCommand(db,'p',state.revision,{kind:'remove-rule-version',versionId:state.data.ruleVersions[0].id}),/已被使用/)
+  db.close()
+})
+
+function combatFixture() {
+  const db=fixture();db.exec("INSERT INTO characters VALUES ('enemy','p','敌人')")
+  let state=applyGameCommand(db,'p',0,{kind:'configure',enabled:true})
+  const skill={id:'bolt',kind:'skill',name:'雷击',aliases:[],description:'',rarity:'',tags:[],slotId:'',activation:'learned',levelRequirement:1,bonuses:{},source:'manual',skill:completeGameSkillDetails({manaCost:20,powerMultiplier:2,flatPower:10})}
+  state=applyGameCommand(db,'p',state.revision,{kind:'upsert-asset',asset:skill})
+  for(const id of ['hero','enemy']) {
+    const seed=emptyGameCharacter(id,state.data);seed.baseStats={health:300,mana:100,spellPower:50,magicResistance:100};seed.learnedSkillIds=id==='hero'?['bolt']:[]
+    state=applyGameCommand(db,'p',state.revision,{kind:'set-character',character:seed})
+  }
+  state=applyGameCommand(db,'p',state.revision,{kind:'version-rules',chapterId:'c1',derivedRules:state.data.derivedRules,flatPrecision:0,percentPrecision:2,combatRules:{...state.data.combatRules,enabled:true}})
+  const command={kind:'combat',chapterId:'c1',attackerId:'hero',defenderId:'enemy',skillId:'bolt',actionId:'action-1',input:{damageType:'physical',power:999,flat:999,hitRoll:0,criticalRoll:99}}
+  return {db,state,command}
+}
+test('技能参数由后端目录重算，耗蓝和伤害原子保存，重复请求幂等，撤销整组',()=>{
+  const {db,state,command}=combatFixture()
+  const next=applyGameCommand(db,'p',state.revision,command)
+  assert.equal(gameSnapshot(next.data,'hero',0,'c1').currentResources.mana,80)
+  assert.equal(gameSnapshot(next.data,'enemy',0,'c1').currentResources.health,245)
+  assert.equal(next.data.events.length,2)
+  assert.equal(applyGameCommand(db,'p',state.revision,command).revision,next.revision)
+  assert.throws(()=>applyGameCommand(db,'p',next.revision,{...command,defenderId:'hero'}),/参数已变化/)
+  const undone=applyGameCommand(db,'p',next.revision,{kind:'remove-event',eventId:next.data.events[0].id})
+  assert.equal(undone.data.events.length,0)
+  assert.equal(gameSnapshot(undone.data,'hero',0,'c1').currentResources.mana,100)
+  db.close()
+})
+test('技能未命中仍耗蓝；蓝量不足或未学技能时不写入部分战斗',()=>{
+  const {db,state,command}=combatFixture()
+  let next=applyGameCommand(db,'p',state.revision,{...command,input:{...command.input,hitRoll:99}})
+  assert.equal(next.data.events.length,1);assert.equal(gameSnapshot(next.data,'enemy',0,'c1').currentResources.health,300)
+  assert.throws(()=>applyGameCommand(db,'p',next.revision,{...command,actionId:'unlearned',attackerId:'enemy',defenderId:'hero'}),/尚未学习/)
+  for(let i=0;i<4;i++)next=applyGameCommand(db,'p',next.revision,{...command,actionId:`attack-${i}`})
+  const before=readGameProject(db,'p')
+  assert.throws(()=>applyGameCommand(db,'p',next.revision,{...command,actionId:'empty'}),/魔法值不足/)
+  assert.deepEqual(readGameProject(db,'p'),before)
   db.close()
 })

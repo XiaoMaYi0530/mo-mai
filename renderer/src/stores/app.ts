@@ -1,3 +1,4 @@
+import { copyBackupChapters, type BackupChapterSelection } from '@shared/backup-preview'
 import { restoreTrashedChapter } from '@shared/chapter-trash'
 import { transferOutlineNodes, undoOutlineTransfer, type OutlineTransferUndo } from '@/features/workspace/outlineTransfer'
 import { computed, ref, watch } from 'vue'
@@ -2780,6 +2781,23 @@ export const useAppStore = defineStore('app', () => {
     schedulePersist('fast')
   }
 
+  function getProjectVolumes(projectId: string): OutlineVolume[] { return projectWorkspaces.value[projectId]?.outlineVolumes ?? [] }
+
+  function appendBackupChapters(projectId: string, volumeId: string, selection: BackupChapterSelection): void {
+    const workspace = projectWorkspaces.value[projectId]
+    if (!workspace?.outlineVolumes.some(v => v.id === volumeId)) throw new Error('目标作品或分卷不存在。')
+    const copied = copyBackupChapters(selection, volumeId, () => uniqueId('restored'))
+    updateProjectWorkspace(projectId, current => {
+      const targetIndex = current.outlineVolumes.findIndex(v => v.id === volumeId)
+      const later = current.chapters.findIndex(c => current.outlineVolumes.findIndex(v => v.id === c.volumeId) > targetIndex)
+      const index = later < 0 ? current.chapters.length : later
+      return { ...current, chapters: [...current.chapters.slice(0,index), ...copied.chapters, ...current.chapters.slice(index)],
+        chapterVersions: [...current.chapterVersions, ...copied.chapterVersions] }
+    })
+    syncProjectWordCount(projectId)
+    schedulePersist('fast')
+  }
+
   async function restoreDeletedChapter(chapterId: string): Promise<void> {
     const entry = deletedChapters.value.find(item => item.id === chapterId)
     if (!entry) throw new Error('回收站章节不存在。')
@@ -3747,6 +3765,8 @@ export const useAppStore = defineStore('app', () => {
     deleteChapter,
     deletedChapters,
     restoreDeletedChapter,
+    appendBackupChapters,
+    getProjectVolumes,
     splitChapter,
     deleteCharacter,
     deleteCharacterRelationship,
