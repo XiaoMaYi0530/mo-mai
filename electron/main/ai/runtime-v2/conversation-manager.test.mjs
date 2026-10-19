@@ -113,3 +113,15 @@ test('模糊追问只继承最近一轮成功完成的 Skill 阶段', () => {
   conversation.updateTurnStatus(failedDraftTurn.id, 'error', '失败')
   assert.equal(conversation.getLatestCompletedSkillStage(session.id), 'outline')
 })
+
+test('人物审查检查点跨管理器重建保留，删除会话时级联清理',()=>{
+  const db=createDatabase(), manager=new ConversationManager(db)
+  const session=manager.createSession({projectId:'project-1',surfaceId:'global-page',title:'审查'})
+  const checkpoint={prompt:'检查全部人物',results:{a:'已完成'},summaries:{b:'汇总'}}
+  manager.saveCharacterReview(session.id,checkpoint)
+  const reloaded=new ConversationManager(db)
+  assert.deepEqual(reloaded.loadCharacterReview(session.id),checkpoint)
+  db.prepare('DELETE FROM assistant_sessions_v2 WHERE id=?').run(session.id)
+  assert.equal(reloaded.loadCharacterReview(session.id),undefined)
+  db.close()
+})

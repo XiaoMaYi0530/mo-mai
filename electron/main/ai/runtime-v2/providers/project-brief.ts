@@ -1,3 +1,4 @@
+import { formatReferenceUsage } from '../../../../shared/reference-usage.ts'
 /**
  * project-brief · 项目基本资料。
  * 所有 Surface 通用、最高优先级（永远保留）。
@@ -24,6 +25,8 @@ export function makeProjectBriefProvider(
       const { project } = view
 
       const lines: string[] = []
+      const usage = formatReferenceUsage(project.referenceUsage, accessor.getSnapshot()?.referenceWorks ?? [])
+      if (usage) lines.push(usage)
       lines.push(`- 标题：${project.title}`)
       if (project.genre) lines.push(`- 题材：${project.genre}`)
       if (project.premise) lines.push(`- 故事定位：${project.premise.slice(0, 1200)}`)

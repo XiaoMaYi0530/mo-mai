@@ -1,3 +1,5 @@
+import { normalizeReferenceUsage, type ReferenceUsage } from '../shared/reference-usage.ts'
+import type { ChapterTrashEntry } from '../shared/chapter-trash'
 import type { ReferenceStyleMetric } from './referenceAnalysis'
 import { normalizeSkillUsePolicy, type SkillUsePolicy } from '../shared/assistant-runtime.ts'
 import { normalizeSkillPresetBindings, type SkillPresetBindings } from '../shared/skill-presets.ts'
@@ -186,7 +188,8 @@ export type WorkspacePayload = {
       task: 'chat' | 'outline-draft'
       requiresSelection: boolean
     }>
-    selectedReferenceWorkIds: string[]
+    referenceUsage?: ReferenceUsage[]
+  selectedReferenceWorkIds: string[]
     styleFingerprintBinding: ProjectStyleFingerprintBinding
   }>
   workspaces: Record<
@@ -285,6 +288,7 @@ export type WorkspacePayload = {
         wordTarget: string
         content: string
       }>
+      deletedChapters?: ChapterTrashEntry<WorkspacePayload['workspaces'][string]['chapters'][number], WorkspacePayload['workspaces'][string]['chapterVersions'][number]>[]
       chapterVersions: Array<{
         id: string
         chapterId: string
@@ -656,6 +660,7 @@ export function normalizeProjectRecord(
     selectedReferenceWorkIds: Array.isArray(project.selectedReferenceWorkIds)
       ? project.selectedReferenceWorkIds.map((id) => String(id).trim()).filter(Boolean)
       : [],
+    referenceUsage: normalizeReferenceUsage(project.referenceUsage),
     styleFingerprintBinding: normalizeStyleFingerprintBinding(
       project.styleFingerprintBinding,
       project.selectedReferenceWorkIds

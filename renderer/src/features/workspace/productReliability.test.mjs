@@ -77,3 +77,11 @@ test('装备与技能库标签具有独立且等宽的选择区域', async () =>
   assert.match(source, /\.tool-tabs\s*:deep\(\.n-tabs-tab-wrapper\)\{[^}]*flex:1/)
   assert.match(source, /\.tool-tabs\s*:deep\(\.n-tabs-tab\)\{[^}]*justify-content:center/)
 })
+
+test('回收站穿过工作区标准化与归档，避免删除后在中间层被静默丢弃', async()=>{
+  const [helpers,workspace,archive]=await Promise.all([readSource('./storeHelpers.ts'),readSource('./projectWorkspace.ts'),readSource('../../../../electron/main/archive/project-archive.ts')])
+  assert.match(helpers,/deletedChapters: normalized\.deletedChapters/)
+  assert.match(workspace,/deletedChapters: workspace\.deletedChapters/)
+  assert.match(archive,/addJson\(zip, 'workspace\/deletedChapters\.json'/)
+  assert.match(archive,/deletedChapters: await readZipJson/)
+})

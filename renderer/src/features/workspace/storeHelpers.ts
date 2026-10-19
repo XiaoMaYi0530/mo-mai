@@ -1,3 +1,4 @@
+import { normalizeReferenceUsage } from '@shared/reference-usage'
 import { toRaw } from 'vue'
 import { normalizeSkillUsePolicy } from '@shared/assistant-runtime'
 import { normalizeSkillPresetBindings } from '@shared/skill-presets'
@@ -113,6 +114,7 @@ export function normalizeProjectSummary(project: ProjectSummary): ProjectSummary
     selectedReferenceWorkIds: Array.isArray(project.selectedReferenceWorkIds)
       ? project.selectedReferenceWorkIds.map((id) => String(id).trim()).filter(Boolean)
       : [],
+    referenceUsage: normalizeReferenceUsage(project.referenceUsage),
     styleFingerprintBinding: normalizeStyleFingerprintBinding(
       project.styleFingerprintBinding,
       project.selectedReferenceWorkIds
@@ -502,6 +504,7 @@ export function normalizeProjectWorkspaceData(
     outlineItems: normalized.outlineItems,
     chapters: normalized.chapters.map(normalizeChapterDraft),
     chapterVersions: normalized.chapterVersions.map(normalizeChapterVersion),
+    deletedChapters: normalized.deletedChapters ?? [],
     messages: normalized.messages,
     globalAssistantSessions: normalized.globalAssistantSessions,
     activeGlobalAssistantSessionId: normalized.activeGlobalAssistantSessionId,

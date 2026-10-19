@@ -32,7 +32,18 @@ watch(() => [props.row.revision, index.value], () => {
 }, { immediate: true })
 const canSave = computed(() => index.value >= 0 && store.selectedChapter?.status !== 'final'
   && !props.row.data.events.some(e => !e.orphaned && e.chapterIndex >= index.value)
-  && !(props.row.data.ruleVersions ?? []).some(v => v.chapterIndex >= index.value))
+  && !(props.row.data.ruleVersions ?? []).some(v => v.chapterIndex > index.value)
+  && !store.chapters.some((chapter,i) => i >= index.value && chapter.status === 'final'))
+const currentVersion = computed(() => props.row.data.ruleVersions?.find(v => v.effectiveChapterId === store.selectedChapterId))
+async function removeVersion() {
+  if (!currentVersion.value || !canSave.value) return
+  busy.value = true
+  try {
+    const response = await window.characterArc.gameCommand({ projectId: store.selectedProjectId, expectedRevision: props.row.revision, command: { kind: 'remove-rule-version', versionId: currentVersion.value.id } })
+    if (!response.success) throw new Error(response.error)
+    message.success('未使用的规则已移除，本章恢复此前规则。'); emit('saved')
+  } catch(error) { message.error(String(error)) } finally { busy.value = false }
+}
 async function save() {
   busy.value = true
   try {
@@ -59,8 +70,9 @@ async function save() {
     <p>命中率＝基础命中＋攻击方命中－有效闪避，再限制到命中上下限；暴击不超过设定上限。面板闪避保留原值，战斗时使用上限。</p>
     <p>伤害＝向下取整［（攻击或法强 × 倍率＋基础伤害）× 防御系数 ÷（防御系数＋防御或魔抗）×（暴击时使用暴击倍率，否则为 1）］。未命中伤害为 0。</p>
     <p>每秒行动次数＝速度 ÷ 基准速度 × 基准次数，限制在 0 与上限之间；只是参考频率，不自动模拟连续战斗。</p>
-    <button :disabled="busy || !canSave" @click="save">保存为从本章起生效的新版本</button>
-    <p v-if="!canSave">请选择未定稿、位于已有数值记录及规则版本之后的章节。</p>
+    <button :disabled="busy || !canSave" @click="save">{{ currentVersion ? '保存未使用版本的修改' : '保存为从本章起生效的新版本' }}</button>
+    <button v-if="currentVersion" :disabled="busy || !canSave" @click="removeVersion">移除未使用版本</button>
+    <p v-if="!canSave">本章或后续已有数值记录、定稿章节或后续规则版本，不能改写历史；请选择后续未使用章节。</p>
     <ul><li v-for="version in row.data.ruleVersions" :key="version.id">从《{{ store.chapters.find(c => c.id === version.effectiveChapterId)?.title || '已删除章节' }}》生效 · 百分比 {{ version.percentPrecision }} 位 · 战斗{{ version.combatRules.enabled ? '开启' : '关闭' }}</li></ul>
   </details>
 </template>

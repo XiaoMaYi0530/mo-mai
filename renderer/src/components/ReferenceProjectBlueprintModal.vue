@@ -18,7 +18,7 @@ import {
 import { useReferenceProjectCreation, type ReferenceCreationProps } from '@/features/wizard/useReferenceProjectCreation'
 const props = defineProps<ReferenceCreationProps>()
 const emit = defineEmits<{ 'update:show': [value: boolean] }>()
-const { generatingStage, generating, conceptResult, selectedConceptId, result, editingBlueprint, revisionMessages, revisionInput, revisionBusy, revisionProposal, creationMode, directNovelLength, reuseCurrentWorldview, sourceProject, sourceWorldviewEntries, purposeOptions, referencePlan, auxiliaryAssetOptions, styleReferenceOptions, form, genreOptions, draftSavedAt, restoredDraft, startFreshDraft, selectedConcept, groupedOutline, close, startEditingBlueprint, cancelEditingBlueprint, saveEditingBlueprint, addOutlineItem, removeOutlineItem, addChapterPlan, removeChapterPlan, sendRevisionRequest, adoptRevision, discardRevision, revisionEditLabel, revisionExistingTitle, generateConceptOptions, selectConcept, generateBlueprint, createProject, createDirectProject } = useReferenceProjectCreation(props, emit)
+const { inputsChanged, pendingProjectId, savingProject, retryProjectSave, activeTaskId, stopGeneration, generatingStage, generating, conceptResult, selectedConceptId, result, editingBlueprint, revisionMessages, revisionInput, revisionBusy, revisionProposal, creationMode, directNovelLength, reuseCurrentWorldview, sourceProject, sourceWorldviewEntries, purposeOptions, referencePlan, auxiliaryAssetOptions, styleReferenceOptions, form, genreOptions, draftSavedAt, restoredDraft, startFreshDraft, selectedConcept, groupedOutline, close, startEditingBlueprint, cancelEditingBlueprint, saveEditingBlueprint, addOutlineItem, removeOutlineItem, addChapterPlan, removeChapterPlan, sendRevisionRequest, adoptRevision, discardRevision, revisionEditLabel, revisionExistingTitle, generateConceptOptions, selectConcept, generateBlueprint, createProject, createDirectProject } = useReferenceProjectCreation(props, emit)
 </script>
 
 <template>
@@ -32,6 +32,9 @@ const { generatingStage, generating, conceptResult, selectedConceptId, result, e
       </template>
 
       <div class="modal-body-scroll">
+      <n-alert v-if="inputsChanged" type="warning">创作方向或分卷设置已变化，原路线和骨架仍保留。可继续编辑并采用原稿，也可主动重新生成；仅修改书名不会影响成果。</n-alert>
+      <n-alert v-if="pendingProjectId" type="warning">项目等待保存确认，草稿已保留。重试将保存同一个项目，不会重复创建。<n-button :loading="savingProject" @click="retryProjectSave">重试保存</n-button></n-alert>
+      <fieldset :inert="!!pendingProjectId || generating || revisionBusy" :disabled="!!pendingProjectId || generating || revisionBusy" style="border:0;padding:0;margin:0;min-width:0">
       <n-alert type="info" :show-icon="false">
         可以先生成并审阅原创骨架，也可以复制当前小说的世界观后直接创建空白项目。结构参考与文风绑定分别设置。
       </n-alert>
@@ -306,15 +309,16 @@ const { generatingStage, generating, conceptResult, selectedConceptId, result, e
           </n-collapse-item>
         </n-collapse>
       </div>
-      </div>
+      </fieldset></div>
 
       <template #footer>
         <div class="modal-footer">
+          <n-button v-if="activeTaskId" @click="stopGeneration">停止生成</n-button>
           <n-button :disabled="generating || revisionBusy" @click="close">取消</n-button>
-          <n-button v-if="creationMode === 'direct'" type="primary" :disabled="generating || revisionBusy" @click="createDirectProject">
+          <n-button v-if="creationMode === 'direct'" type="primary" :disabled="!!pendingProjectId || generating || revisionBusy" @click="createDirectProject">
             直接创建小说
           </n-button>
-          <n-button v-else type="primary" :disabled="!result || generating || editingBlueprint || revisionBusy || !!revisionProposal" @click="createProject">
+          <n-button v-else type="primary" :disabled="!!pendingProjectId || !result || generating || editingBlueprint || revisionBusy || !!revisionProposal" @click="createProject">
             确认骨架并创建项目
           </n-button>
         </div>

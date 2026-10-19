@@ -1,3 +1,4 @@
+import { restoreTrashedChapter } from '@shared/chapter-trash'
 import { transferOutlineNodes, undoOutlineTransfer, type OutlineTransferUndo } from '@/features/workspace/outlineTransfer'
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
@@ -125,6 +126,7 @@ interface ProjectWorkspacePayload {
     skillPresetBindings?: ProjectSummary['skillPresetBindings']
     targetPlatform?: string
     selectedReferenceWorkIds?: ProjectSummary['selectedReferenceWorkIds']
+    referenceUsage?: ProjectSummary['referenceUsage']
     styleFingerprintBinding?: ProjectSummary['styleFingerprintBinding']
     coverHistory?: ProjectSummary['coverHistory']
   }
@@ -303,6 +305,7 @@ export const useAppStore = defineStore('app', () => {
   /** 当前项目的大纲分卷列表 */
   const outlineVolumes = computed(() => currentWorkspace.value.outlineVolumes)
   /** 当前项目的章节历史版本列表 */
+  const deletedChapters = computed(() => currentWorkspace.value.deletedChapters ?? [])
   const chapterVersions = computed(() => currentWorkspace.value.chapterVersions)
   /** 当前项目的 AI 聊天消息列表 */
   const globalAssistantSessions = computed(() => currentWorkspace.value.globalAssistantSessions)
@@ -1271,7 +1274,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   /** 从向导创建完整项目工作区：分配 ID、设置默认分卷和章节、切换到工作台 */
-  function createProjectWorkspace(payload: ProjectWorkspacePayload, requestedProjectId?: string): string {
+  function createProjectWorkspace(payload: ProjectWorkspacePayload, requestedProjectId?: string, openAfterCreate = true): string {
     const projectId = requestedProjectId?.trim() || uniqueId('project')
     const nextVolumes = payload.outlineVolumes?.length ? payload.outlineVolumes : [createWorkspaceVolume()]
     const nextChapters = payload.chapters?.length ? payload.chapters : [buildStarterChapter(nextVolumes[0].id)]
@@ -1295,6 +1298,7 @@ export const useAppStore = defineStore('app', () => {
       skillPresetBindings: payload.project.skillPresetBindings ?? {},
       targetPlatform: payload.project.targetPlatform?.trim() || '',
       selectedReferenceWorkIds: payload.project.selectedReferenceWorkIds ?? [],
+      referenceUsage: payload.project.referenceUsage ?? [],
       styleFingerprintBinding: payload.project.styleFingerprintBinding ?? { version: 1, primaryReferenceWorkId: '', primaryWeight: 100, auxiliary: [] },
       coverHistory: payload.project.coverHistory ?? []
     }))
@@ -1317,14 +1321,16 @@ export const useAppStore = defineStore('app', () => {
         messages: payload.messages
       })
     }
-    selectedProjectId.value = projectId
-    pendingChapterInsertion.value = null
-    currentView.value = 'workbench'
-    activePanel.value =
-      payload.worldviewEntries?.length || payload.inspirationEntries?.length || payload.outlineItems?.length
-        ? 'overview'
-        : 'chapters'
-    syncSelectedChapter(projectId)
+    if (openAfterCreate) {
+      selectedProjectId.value = projectId
+      pendingChapterInsertion.value = null
+      currentView.value = 'workbench'
+      activePanel.value =
+        payload.worldviewEntries?.length || payload.inspirationEntries?.length || payload.outlineItems?.length
+          ? 'overview'
+          : 'chapters'
+      syncSelectedChapter(projectId)
+    }
     schedulePersist('fast')
     return projectId
   }
@@ -1389,6 +1395,7 @@ export const useAppStore = defineStore('app', () => {
               ? payload.skillPresetBindings
               : project.skillPresetBindings,
             targetPlatform: payload.targetPlatform !== undefined ? payload.targetPlatform.trim() : project.targetPlatform,
+            referenceUsage: payload.referenceUsage ?? project.referenceUsage,
             selectedReferenceWorkIds: payload.selectedReferenceWorkIds !== undefined
               ? payload.selectedReferenceWorkIds
               : project.selectedReferenceWorkIds,
@@ -2717,35 +2724,17 @@ export const useAppStore = defineStore('app', () => {
    * @param outlineIds - 要移动的节点 ID 列表
    * @param targetOutlineId - 目标位置节点 ID
    */
-  function moveOutlineItems(
-    outlineIds: string[],
-    targetOutlineId: string,
-    position: OutlineDropPosition = 'before'
-  ): void {
-    updateCurrentWorkspace((workspace) => {
-      const nextOutlineItems = moveOutlineItemsAroundTarget(
-        workspace.outlineItems,
-        outlineIds,
-        targetOutlineId,
-        position
-      )
-      if (nextOutlineItems === workspace.outlineItems) {
-        return workspace
-      }
-
-      return {
-        ...workspace,
-        outlineItems: reindexOutlineItems(nextOutlineItems)
-      }
-    })
-    schedulePersist('fast')
+  function moveOutlineItems(outlineIds: string[], targetOutlineId: string, position: OutlineDropPosition = 'before'): void {
+    const target = outlineItems.value.find(item => item.id === targetOutlineId)
+    if (!target || outlineIds.includes(targetOutlineId)) return
+    moveOutlineItemsToVolumeEnd(outlineIds, target.volumeId, false, { id: targetOutlineId, position })
   }
 
   const lastOutlineMove = ref<{ projectId: string; undo: OutlineTransferUndo } | null>(null)
   const canUndoOutlineMove = computed(() => lastOutlineMove.value?.projectId === selectedProjectId.value)
-  function moveOutlineItemsToVolumeEnd(outlineIds: string[], volumeId: string, withChapters = false): void {
+  function moveOutlineItemsToVolumeEnd(outlineIds: string[], volumeId: string, withChapters = false, anchor?: { id: string; position: OutlineDropPosition }): void {
     updateCurrentWorkspace((workspace) => {
-      const transfer = transferOutlineNodes(workspace, outlineIds, volumeId, withChapters)
+      const transfer = transferOutlineNodes(workspace, outlineIds, volumeId, withChapters, anchor)
       lastOutlineMove.value = { projectId: selectedProjectId.value, undo: transfer.undo }
       return transfer.workspace
     })
@@ -2778,6 +2767,7 @@ export const useAppStore = defineStore('app', () => {
 
     updateCurrentWorkspace((workspace) => ({
       ...workspace,
+      deletedChapters: [...(workspace.deletedChapters ?? []), { id: chapterId, chapter: { ...workspace.chapters[targetIndex] }, versions: workspace.chapterVersions.filter(v => v.chapterId === chapterId).map(v => ({ ...v })), deletedAt: new Date().toISOString(), originalIndex: targetIndex }],
       chapters: workspace.chapters.filter((chapter) => chapter.id !== chapterId),
       chapterVersions: workspace.chapterVersions.filter((version) => version.chapterId !== chapterId)
     }))
@@ -2788,6 +2778,19 @@ export const useAppStore = defineStore('app', () => {
       pendingChapterInsertion.value = null
     }
     schedulePersist('fast')
+  }
+
+  async function restoreDeletedChapter(chapterId: string): Promise<void> {
+    const entry = deletedChapters.value.find(item => item.id === chapterId)
+    if (!entry) throw new Error('回收站章节不存在。')
+    updateCurrentWorkspace(workspace => {
+      const restored = restoreTrashedChapter(workspace.chapters, workspace.chapterVersions, entry,
+        workspace.outlineVolumes.map(v => v.id), workspace.outlineItems.map(v => v.id))
+      return { ...workspace, chapters: restored.chapters, chapterVersions: restored.versions,
+        deletedChapters: (workspace.deletedChapters ?? []).filter(item => item.id !== chapterId) }
+    })
+    await persistWorkspace()
+    if (persistenceError.value) throw new Error(`章节已恢复到当前目录，但保存失败，请重试保存：${persistenceError.value}`)
   }
 
   /** 按预览计划拆分章节；第一部分保留原 ID，并保存拆分前完整版本。 */
@@ -3742,6 +3745,8 @@ export const useAppStore = defineStore('app', () => {
     isPersisting,
     isPersistencePending,
     deleteChapter,
+    deletedChapters,
+    restoreDeletedChapter,
     splitChapter,
     deleteCharacter,
     deleteCharacterRelationship,

@@ -600,6 +600,7 @@ export async function exportProjectArchive(options: ExportProjectArchiveOptions)
   if (gameProgression) addJson(zip, 'workspace/gameProgression.json', gameProgression)
   addJson(zip, 'workspace/customSkills.json', customSkills)
   addJson(zip, 'workspace/chapterVersions.json', workspace.chapterVersions)
+  addJson(zip, 'workspace/deletedChapters.json', workspace.deletedChapters ?? [])
   addJson(zip, 'workspace/workflowDocuments.json', workspace.workflowDocuments)
   addJson(zip, 'workspace/knowledgeDocuments.json', knowledgeDocuments)
   addJson(zip, 'workspace/referenceWorks.json', referenceWorks)
@@ -669,6 +670,7 @@ async function readArchiveContent(filePath: string): Promise<ProjectArchiveConte
     outlineVolumes: outlinePayload.outlineVolumes ?? [],
     outlineItems: outlinePayload.outlineItems ?? [],
     chapters: await readZipJson(zip, 'workspace/chapters.json', []),
+    deletedChapters: await readZipJson(zip, 'workspace/deletedChapters.json', []),
     chapterVersions: await readZipJson(zip, 'workspace/chapterVersions.json', []),
     messages: assistantPayload.messages ?? [],
     globalAssistantSessions: assistantPayload.globalAssistantSessions ?? [],
@@ -781,6 +783,7 @@ function remapArchiveContent(
   for (const volume of content.workspace.outlineVolumes) assign(volume.id, 'volume')
   for (const item of content.workspace.outlineItems) assign(item.id, 'outline')
   for (const chapter of content.workspace.chapters) assign(chapter.id, 'chapter')
+  for (const entry of content.workspace.deletedChapters ?? []) { assign(entry.id, 'chapter'); for (const version of entry.versions) assign(version.id, 'version') }
   for (const version of content.workspace.chapterVersions) assign(version.id, 'version')
   for (const character of content.workspace.characters) assign(character.id, 'character')
   for (const organization of content.workspace.organizations) assign(organization.id, 'org')
@@ -805,6 +808,7 @@ function remapArchiveContent(
     selectedReferenceWorkIds: modules.has('referenceWorks')
       ? (content.project.selectedReferenceWorkIds ?? []).map((id) => mapId(idMap, id)).filter(Boolean)
       : [],
+    referenceUsage: modules.has('referenceWorks') ? (content.project.referenceUsage ?? []).map(row => ({ ...row, referenceWorkId: mapId(idMap, row.referenceWorkId) })) : [],
     styleFingerprintBinding: modules.has('referenceWorks')
       ? remapStyleFingerprintBinding(content.project.styleFingerprintBinding, (id) => mapId(idMap, id))
       : { version: 1, primaryReferenceWorkId: '', primaryWeight: 100, auxiliary: [] }
@@ -860,6 +864,9 @@ function remapArchiveContent(
           outlineItemId: mapId(idMap, chapter.outlineItemId)
         }))
       : [],
+    deletedChapters: modules.has('chapters') ? (content.workspace.deletedChapters ?? []).map(entry => ({ ...entry, id: mapId(idMap, entry.id),
+      chapter: { ...entry.chapter, id: mapId(idMap, entry.chapter.id), volumeId: mapId(idMap, entry.chapter.volumeId), outlineItemId: mapId(idMap, entry.chapter.outlineItemId) },
+      versions: entry.versions.map(version => ({ ...version, id: mapId(idMap, version.id), chapterId: mapId(idMap, version.chapterId) })) })) : [],
     chapterVersions: modules.has('chapterVersions')
       ? content.workspace.chapterVersions.map((version) => ({
           ...version,
@@ -989,6 +996,7 @@ function mergeWorkspace(
     chapters: modules.has('chapters')
       ? overwrite ? incoming.chapters : [...current.chapters, ...incoming.chapters]
       : current.chapters,
+    deletedChapters: modules.has('chapters') ? overwrite ? incoming.deletedChapters ?? [] : [...(current.deletedChapters ?? []), ...(incoming.deletedChapters ?? [])] : current.deletedChapters,
     chapterVersions: modules.has('chapterVersions')
       ? overwrite ? incoming.chapterVersions : [...current.chapterVersions, ...incoming.chapterVersions]
       : current.chapterVersions,
@@ -1097,6 +1105,7 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
           : {}),
         ...(modules.has('referenceWorks') ? {
           selectedReferenceWorkIds: incoming.project.selectedReferenceWorkIds,
+          referenceUsage: incoming.project.referenceUsage,
           styleFingerprintBinding: incoming.project.styleFingerprintBinding
         } : {}),
         lastEdited: new Date().toISOString()

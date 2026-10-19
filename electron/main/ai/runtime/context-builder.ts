@@ -29,6 +29,8 @@ export function buildPromptInput(
         user: `${baseCapabilityPreamble.user}\n\n【AI 项目小结（自动派生，仅用于定位）】\n${projectDigest}`
       }
     : baseCapabilityPreamble
+  const usageBlock = String(task.context.referenceUsageBlock ?? '').trim()
+  if (usageBlock) capabilityPreamble.user += `\n\n${usageBlock}`
   const knowledgeBlock = formatRetrievedKnowledge(knowledgeContext?.usedKnowledge)
 
   return {

@@ -97,3 +97,31 @@ test('1440 窗口侧栏可拉宽，同时留出编辑区', () => {
   assert.equal(resolveAssistantWidth(1000,1440,true),736)
   assert.equal(resolveAssistantWidth(560,1000,true),296)
 })
+
+test('审查中断后复用已完成批次，相同正文不同人物分别审查，改卡后重新审查', async () => {
+  const checkpoint={prompt:'检查全部人物',results:{},summaries:{}}
+  let bodies=['相同正文','相同正文'], calls=[], fail=true, saved=0
+  const deps={checkpoint,saveCheckpoint:()=>saved++,ctx:{signal:new AbortController().signal},onRead:()=>{},onProgress:()=>{},
+    tool:{handler:async({scan_cursor:i})=>({content:encodeReadReceipt({module:'characters',total:2,items:[{id:String(i),title:String(i),mode:'full',from:0,to:bodies[i].length,total:bodies[i].length}],...(i===0?{nextCursor:1}:{})},bodies[i])})},
+    review:async(body,batch)=>{calls.push(batch);if(batch===2&&fail)throw Error('断网');return `结论${batch}:${body}`}}
+  await assert.rejects(reviewAllCharacters(deps),/断网/)
+  assert.equal(saved,1);fail=false;calls=[]
+  await reviewAllCharacters(deps);assert.deepEqual(calls,[2])
+  bodies[0]='修改后的卡';calls=[]
+  const result=await reviewAllCharacters(deps);assert.deepEqual(calls,[1]);assert.match(result,/修改后的卡/)
+})
+test('大量审查结论分层压缩，汇总失败后保留批次并可恢复', async()=>{
+  const checkpoint={prompt:'检查全部人物',results:{},summaries:{}}
+  let calls=0,fail=true
+  const receipt={module:'characters',total:1,items:[{id:'a',title:'甲',mode:'full',from:0,to:1,total:1}]}
+  const deps={checkpoint,ctx:{signal:new AbortController().signal},onRead:()=>{},onProgress:()=>{},tool:{handler:async()=>({content:encodeReadReceipt(receipt,'卡')})},review:async(body,batch)=>{if(batch){calls++;return '结论'.repeat(16000)}if(fail)throw Error('汇总断网');return '压缩结论'}}
+  await assert.rejects(reviewAllCharacters(deps),/汇总断网/)
+  fail=false;assert.match(await reviewAllCharacters(deps),/压缩结论/);assert.equal(calls,1)
+})
+test('跨卷拖放锚点同时定位大纲与关联章节，撤销恢复原顺序',()=>{
+  const ws={outlineVolumes:[{id:'v1'},{id:'v2'}],outlineItems:[{id:'a',volumeId:'v1'},{id:'b',volumeId:'v2'},{id:'c',volumeId:'v2'}],chapters:[{id:'a1',outlineItemId:'a',volumeId:'v1'},{id:'b1',outlineItemId:'b',volumeId:'v2'},{id:'c1',outlineItemId:'c',volumeId:'v2'}]}
+  const moved=transferOutlineNodes(ws,['a'],'v2',true,{id:'c',position:'before'})
+  assert.deepEqual(moved.workspace.outlineItems.map(i=>i.id),['b','a','c'])
+  assert.deepEqual(moved.workspace.chapters.map(i=>i.id),['b1','a1','c1'])
+  assert.deepEqual(undoOutlineTransfer(moved.workspace,moved.undo).chapters,ws.chapters)
+})

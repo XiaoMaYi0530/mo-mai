@@ -5,6 +5,7 @@
  * 按 change.kind 分发到对应写库函数。
  */
 
+import { archiveChapterBeforeDelete } from '../../chapter-trash-store.ts'
 import { randomUUID } from 'node:crypto'
 import type {
   StagedChange,
@@ -155,6 +156,7 @@ async function commitDelete(
 
     db.exec('BEGIN')
     try {
+      archiveChapterBeforeDelete(db, projectId, change.entityId)
       db.prepare('DELETE FROM chapters WHERE id = ? AND project_id = ?').run(change.entityId, projectId)
       db.prepare(`
         DELETE FROM story_embeddings

@@ -1,3 +1,5 @@
+import { normalizeReferenceUsage, type ReferenceUsage } from '../../../electron/shared/reference-usage'
+import type { ChapterTrashEntry } from '../../../electron/shared/chapter-trash'
 import type { SkillUsePolicy } from '@shared/assistant-runtime'
 import type { SkillPresetBindings } from '@shared/skill-presets'
 import type { ProjectStyleFingerprintBinding } from '@shared/style-fingerprint-binding'
@@ -346,6 +348,7 @@ export interface ProjectSummary {
   /** 项目目标平台 */
   targetPlatform: string
   /** 本次用于生成创作记忆的参考作品 ID 列表（指向全局拆书库），可为空 */
+  referenceUsage?: ReferenceUsage[]
   selectedReferenceWorkIds: string[]
   /** 正文生成与润色统一使用的项目风格指纹绑定 */
   styleFingerprintBinding: ProjectStyleFingerprintBinding
@@ -813,6 +816,7 @@ export interface ChapterVersion {
 
 /** 单个项目的工作区完整数据，包含所有业务实体 */
 export interface ProjectWorkspaceData {
+  deletedChapters?: ChapterTrashEntry<ChapterDraft, ChapterVersion>[]
   /** 世界观设定列表 */
   worldviewEntries: WorldviewEntry[]
   /** 角色卡列表 */

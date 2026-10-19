@@ -1,3 +1,4 @@
+import { initChapterTrashSchema, readChapterTrash, writeChapterTrash } from './chapter-trash-store'
 import { join } from 'node:path'
 import { mkdir, readFile } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
@@ -428,6 +429,7 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
   ensureKnowledgeDocumentSchema(db)
   initStoryStateSchema(db)
   initGameProgressionSchema(db)
+  initChapterTrashSchema(db)
   initAssistantRuntimeSchema(db)
   initChapterProcessingSchema(db)
   initStateBackfillSchema(db)
@@ -746,6 +748,7 @@ function ensureProjectColumns(db: DatabaseSync): void {
   if (!columnNames.has('reference_works_json')) {
     db.exec(`ALTER TABLE projects ADD COLUMN reference_works_json TEXT NOT NULL DEFAULT '[]';`)
   }
+  if (!columnNames.has('reference_usage_json')) db.exec("ALTER TABLE projects ADD COLUMN reference_usage_json TEXT NOT NULL DEFAULT '[]'")
   if (!columnNames.has('style_fingerprint_binding_json')) {
     db.exec(`ALTER TABLE projects ADD COLUMN style_fingerprint_binding_json TEXT NOT NULL DEFAULT '{}';`)
   }
@@ -775,6 +778,7 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
       writing_style_preset_id AS writingStylePresetId,
       writing_style_prompt AS writingStylePrompt,
       reference_works_json AS referenceWorksJson,
+      reference_usage_json AS referenceUsageJson,
       style_fingerprint_binding_json AS styleFingerprintBindingJson,
       novel_workflow_stages_json AS novelWorkflowStagesJson,
       project_skills_json AS projectSkillsJson,
@@ -783,10 +787,11 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
       chapter_assistant_templates_json AS chapterAssistantTemplatesJson
     FROM projects
     ORDER BY rowid ASC
-  `).all() as Array<
+  `).all() as unknown as Array<
     Omit<WorkspacePayload['projects'][number], 'chapterAssistantTemplates' | 'novelWorkflowStages' | 'projectSkills' | 'skillPolicy' | 'skillPresetBindings' | 'coverHistory' | 'selectedReferenceWorkIds' | 'styleFingerprintBinding'> & {
       coverHistoryJson?: string
       referenceWorksJson?: string
+      referenceUsageJson?: string
       styleFingerprintBindingJson?: string
       chapterAssistantTemplatesJson?: string
       novelWorkflowStagesJson?: string
@@ -801,6 +806,7 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
       ...project,
       coverHistory: parseJson(project.coverHistoryJson, []),
       selectedReferenceWorkIds: parseJson(project.referenceWorksJson, [] as string[]),
+      referenceUsage: parseJson(project.referenceUsageJson, []),
       styleFingerprintBinding: parseJson(project.styleFingerprintBindingJson, {
         version: 1,
         primaryReferenceWorkId: '',
@@ -1344,6 +1350,7 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
           .map(({ projectId: _projectId, ...item }) => item),
         chapters: (chaptersByProject.get(project.id) ?? [])
           .map(({ projectId: _projectId, ...chapter }) => chapter),
+        deletedChapters: readChapterTrash<NonNullable<WorkspacePayload['workspaces'][string]['deletedChapters']>[number]>(db, project.id),
         chapterVersions: (versionsByProject.get(project.id) ?? [])
           .map(({ projectId: _projectId, ...version }) => version),
         messages: (messagesByProject.get(project.id) ?? [])
@@ -1483,6 +1490,7 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
         JSON.stringify(project.skillPresetBindings ?? {}),
         JSON.stringify(project.chapterAssistantTemplates ?? [])
       )
+      db.prepare('UPDATE projects SET reference_usage_json = ? WHERE id = ?').run(JSON.stringify(project.referenceUsage ?? []), project.id)
     }
 
     const insertWorldview = db.prepare(`
@@ -1721,6 +1729,7 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
         )
       })
 
+      writeChapterTrash(db, project.id, workspace.deletedChapters)
       workspace.chapterVersions.forEach((version) => {
         allIds.chapter_versions.add(version.id)
         insertChapterVersion.run(

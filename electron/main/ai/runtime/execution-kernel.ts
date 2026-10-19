@@ -1,3 +1,4 @@
+import { formatReferenceUsage } from '../../../shared/reference-usage.ts'
 import { shouldTryStreamingAgent } from '@shared/ai-provider-catalog'
 import type { WorkspacePayload } from '../../workspace-types'
 import { retrieveKnowledgeContext } from '../knowledge-retrieval'
@@ -37,6 +38,8 @@ export function prepareAiExecution(
   snapshot: WorkspacePayload | null
 ): PreparedAiExecution {
   attachProjectDigest(task, snapshot)
+  const project = snapshot?.projects.find(project => project.id === task.context.projectId)
+  task.context.referenceUsageBlock = formatReferenceUsage(project?.referenceUsage, snapshot?.referenceWorks ?? [])
   const settings = normalizeSettings(task.settings)
   return {
     settings,

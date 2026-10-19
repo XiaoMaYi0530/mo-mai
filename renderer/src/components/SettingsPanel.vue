@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ReferenceUsageEditor from './ReferenceUsageEditor.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { Archive, FileJson, FileStack, FileText, Lightbulb, Moon, Network, PenTool, Save, Upload, Users } from 'lucide-vue-next'
 import { NButton, NCard, NFormItem, NInput, NSelect, NSwitch, useDialog, useMessage } from 'naive-ui'
@@ -330,6 +331,7 @@ watch(
     </div>
 
     <div class="settings-wrap">
+      <ReferenceUsageEditor />
       <n-card class="setting-card" :bordered="false">
         <template #header>
           <div class="block-title">

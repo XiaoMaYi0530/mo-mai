@@ -318,6 +318,7 @@ const migrateModalVisible = ref(false)
 const migrateTargetVolumeId = ref<string>('')
 const migrateOutlineIds = ref<string[]>([])
 const migrateWithChapters = ref(true)
+const migrateAnchor = ref<{ id: string; position: OutlineDropPosition } | null>(null)
 const migrateChapterCount = computed(() => appStore.chapters.filter(chapter => migrateOutlineIds.value.includes(chapter.outlineItemId)).length)
 function undoMove() {
   if (appStore.undoLastOutlineMove()) message.success('已撤销分卷移动，正文修改保留。')
@@ -325,6 +326,7 @@ function undoMove() {
 }
 
 function openMigrateModal(outlineIds: string[]): void {
+  migrateAnchor.value = null
   const existingIds = new Set(appStore.outlineItems.map((item) => item.id))
   migrateOutlineIds.value = [...new Set(outlineIds)].filter((id) => existingIds.has(id))
   if (!migrateOutlineIds.value.length || appStore.outlineVolumes.length < 2) return
@@ -342,7 +344,7 @@ function submitMigrate(): void {
 
   const count = migrateOutlineIds.value.length
   if (!count) return
-  appStore.moveOutlineItemsToVolumeEnd(migrateOutlineIds.value, migrateTargetVolumeId.value, migrateWithChapters.value)
+  appStore.moveOutlineItemsToVolumeEnd(migrateOutlineIds.value, migrateTargetVolumeId.value, migrateWithChapters.value, migrateAnchor.value ?? undefined)
 
   message.success(`已移动 ${count} 个节点、${migrateWithChapters.value ? migrateChapterCount.value : 0} 个关联章节；可在工具栏撤销。`)
   selectedOutlineIds.value.clear()
@@ -1609,7 +1611,12 @@ function handleDrop(outlineId: string, event: DragEvent): void {
   const position = dragTargetOutlineId.value === outlineId && dragTargetPosition.value
     ? dragTargetPosition.value
     : resolveDropPosition(event)
-  appStore.moveOutlineItems(draggedIds, outlineId, position)
+  const target = appStore.outlineItems.find(item => item.id === outlineId)
+  if (target && draggedIds.some(id => appStore.outlineItems.find(item => item.id === id)?.volumeId !== target.volumeId)) {
+    openMigrateModal(draggedIds)
+    migrateTargetVolumeId.value = target.volumeId
+    migrateAnchor.value = { id: outlineId, position }
+  } else appStore.moveOutlineItems(draggedIds, outlineId, position)
 
   selectedOutlineIds.value.clear()
   resetDragState()
@@ -1650,7 +1657,8 @@ function handleDropOnVolume(volumeId: string, event: DragEvent): void {
     return
   }
 
-  appStore.moveOutlineItemsToVolumeEnd(draggedIds, volumeId)
+  openMigrateModal(draggedIds)
+  migrateTargetVolumeId.value = volumeId
   selectedOutlineIds.value.clear()
   resetDragState()
 }
@@ -2517,7 +2525,7 @@ watch(
       </n-form>
       <n-checkbox v-model:checked="migrateWithChapters">同时移动关联章节（{{ migrateChapterCount }} 章）</n-checkbox>
       <p style="margin-top: 12px; font-size: 13px; color: var(--arc-text-hint);">
-        将 {{ migrateOutlineIds.length }} 个节点移动到所选分卷末尾。
+        将 {{ migrateOutlineIds.length }} 个节点移动到所选分卷{{ migrateAnchor ? '的拖放位置' : '末尾' }}。
         {{ migrateWithChapters ? `同时移动 ${migrateChapterCount} 个关联章节，正文保持不变。` : '关联章节仍留在原卷。' }}
       </p>
     </n-modal>

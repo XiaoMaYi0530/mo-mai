@@ -60,6 +60,7 @@ const modeOptions: Array<{ id: AssistantMode; label: string; description: string
 
 const quickActions: Record<AssistantMode, Array<{ label: string; prompt: string }>> = {
   ingest: [
+    { label: '继续人物审查', prompt: '继续检查全部人物，复用已保存的分批结论，完成剩余审查并汇总。' },
     { label: '检查全部人物', prompt: '检查全部人物，分批完整读取人物资料，核对人物动机、关系和设定冲突，汇总问题。' },
     { label: '整理项目现状', prompt: '请读取项目资料，整理当前项目概况、下一步创作计划和需要沉淀的创作记忆。' },
     { label: '录入设定草稿', prompt: '我会给你一段设定草稿，请拆成可写入的世界观、人物、组织、大纲或创作记忆暂存变更。' },

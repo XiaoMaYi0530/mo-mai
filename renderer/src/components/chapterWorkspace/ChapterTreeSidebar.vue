@@ -22,6 +22,13 @@ const appStore = useAppStore()
 const dialog = useDialog()
 const message = useMessage()
 
+const trashVisible = ref(false)
+const restoringChapter = ref(false)
+async function restoreChapter(id: string) {
+  restoringChapter.value = true
+  try { await appStore.restoreDeletedChapter(id); message.success('章节与历史版本已恢复。') }
+  catch (error) { message.error(String(error)) } finally { restoringChapter.value = false }
+}
 const keyword = ref('')
 const collapsed = reactive<Record<string, boolean>>({})
 const draggingChapterId = ref<string | null>(null)
@@ -853,7 +860,7 @@ function handleMenuSelect(key: string | number, chapter: ChapterDraft): void {
     if (appStore.chapters.length <= 1) return
     dialog.warning({
       title: '确认删除章节',
-      content: `确定要删除"${chapter.title}"吗？删除后当前章节草稿将无法恢复。`,
+      content: `确定要删除"${chapter.title}"吗？章节及历史版本将移入回收站，可随时恢复。`,
       positiveText: '确认删除',
       negativeText: '取消',
       autoFocus: false,
@@ -866,6 +873,14 @@ function handleMenuSelect(key: string | number, chapter: ChapterDraft): void {
 
 <template>
   <aside class="tree-sidebar">
+    <n-modal v-model:show="trashVisible" preset="card" title="章节回收站" style="width:min(720px,94vw)">
+      <p>保留删除时的正文与历史版本。原分卷已删除时，恢复到现有首卷。回收站随工作区备份保存。</p>
+      <p v-if="!appStore.deletedChapters.length">没有已删除章节。</p>
+      <div v-for="entry in appStore.deletedChapters" :key="entry.id" style="display:flex;gap:16px;align-items:center;margin:14px 0">
+        <div style="flex:1"><strong>{{ entry.chapter.title }}</strong><div>{{ new Date(entry.deletedAt).toLocaleString() }} · {{ entry.versions.length }} 个历史版本</div></div>
+        <n-button :disabled="restoringChapter" @click="restoreChapter(entry.id)">恢复章节</n-button>
+      </div>
+    </n-modal>
     <header class="ts-header">
       <div class="project-name">
         <span class="dot" />
@@ -882,6 +897,7 @@ function handleMenuSelect(key: string | number, chapter: ChapterDraft): void {
     </header>
 
     <div class="ts-toolbar">
+      <n-button size="tiny" @click="trashVisible = true">回收站 {{ appStore.deletedChapters.length || '' }}</n-button>
       <n-tooltip trigger="hover" placement="bottom">
         <template #trigger>
           <button class="icon-btn flex" @click="openVolumeDialog()"><FolderPlus :size="14" /></button>

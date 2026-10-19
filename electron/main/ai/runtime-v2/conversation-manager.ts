@@ -1,3 +1,4 @@
+import type { CharacterReviewCheckpoint } from './character-review'
 /**
  * ConversationManager
  *
@@ -41,6 +42,8 @@ export function initAssistantRuntimeSchema(db: DatabaseSync): void {
       updated_at TEXT NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
     ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS character_review_checkpoints (session_id TEXT PRIMARY KEY, data_json TEXT NOT NULL, FOREIGN KEY (session_id) REFERENCES assistant_sessions_v2(id) ON DELETE CASCADE) STRICT;
 
     CREATE TABLE IF NOT EXISTS assistant_turns (
       id TEXT PRIMARY KEY,
@@ -557,6 +560,14 @@ export class ConversationManager {
       turn: this.getTurn(turnId),
       events: this.listEvents(turnId)
     }
+  }
+
+  loadCharacterReview(sessionId: string): CharacterReviewCheckpoint | undefined {
+    const row = this.db.prepare('SELECT data_json FROM character_review_checkpoints WHERE session_id = ?').get(sessionId) as { data_json: string } | undefined
+    return row ? JSON.parse(row.data_json) : undefined
+  }
+  saveCharacterReview(sessionId: string, checkpoint: CharacterReviewCheckpoint): void {
+    this.db.prepare('INSERT INTO character_review_checkpoints (session_id,data_json) VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET data_json=excluded.data_json').run(sessionId, JSON.stringify(checkpoint))
   }
 
   upsertTurnState(input: UpsertTurnStateInput): void {

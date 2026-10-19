@@ -30,6 +30,7 @@ import {
 export type GameCommand =
   | { kind: 'configure'; enabled?: boolean; pointsPerLevel?: number; derivedRules?: GameDerivedRules; tierRules?: GameTierRules; stats?: GameStatDefinition[]; slots?: GameSlotDefinition[] }
   | { kind: 'combat'; chapterId: string; attackerId: string; defenderId: string; input: CombatInput }
+  | { kind: 'remove-rule-version'; versionId: string }
   | { kind: 'version-rules'; chapterId: string; derivedRules: GameDerivedRules; flatPrecision: number; percentPrecision: number; combatRules: CombatRules }
   | { kind: 'set-slot-enabled'; slotId: string; enabled: boolean }
   | { kind: 'set-protagonist'; characterId: string }
@@ -521,6 +522,16 @@ export function applyGameCommand(
       }
       break
     }
+    case 'remove-rule-version': {
+      const version = data.ruleVersions?.find(v => v.id === command.versionId)
+      if (!version) throw new Error('规则版本不存在。')
+      const chapters = db.prepare('SELECT id, status FROM chapters WHERE project_id = ? ORDER BY sort_order ASC, rowid ASC').all(projectId) as Array<{ id: string; status: string }>
+      if (data.events.some(e => !e.orphaned && e.chapterIndex >= version.chapterIndex)
+        || chapters.some((c,index) => index >= version.chapterIndex && c.status === 'final')
+        || data.ruleVersions?.some(v => v.chapterIndex > version.chapterIndex)) throw new Error('规则已被使用或存在后续版本，不能删除。')
+      data.ruleVersions = data.ruleVersions!.filter(v => v.id !== version.id)
+      break
+    }
     case 'version-rules': {
       assertDerivedRules(command.derivedRules)
       assertCombatRules(command.combatRules)
@@ -530,8 +541,12 @@ export function applyGameCommand(
       const chapter = db.prepare('SELECT status FROM chapters WHERE project_id = ? AND id = ?').get(projectId, command.chapterId) as { status: string }
       if (chapter.status === 'final') throw new Error('规则不能从已定稿章节开始生效。')
       if (data.events.some(event => !event.orphaned && event.chapterIndex >= chapterIndex)) throw new Error('本章或后续章节已有数值记录，请选择尚无记录的后续章节。')
-      if ((data.ruleVersions ?? []).some(version => version.chapterIndex >= chapterIndex)) throw new Error('新规则必须从上一个规则版本之后的章节生效。')
-      data.ruleVersions = [...(data.ruleVersions ?? []), { id: randomUUID(), effectiveChapterId: command.chapterId,
+      const laterFinal = db.prepare('SELECT id, status FROM chapters WHERE project_id = ? ORDER BY sort_order ASC, rowid ASC').all(projectId) as Array<{ id: string; status: string }>
+      if (laterFinal.some((entry,index) => index >= chapterIndex && entry.status === 'final')) throw new Error('本章或后续章节已定稿，不能修改其生效规则。')
+      if ((data.ruleVersions ?? []).some(version => version.chapterIndex > chapterIndex)) throw new Error('存在后续规则版本，不能修改更早的规则。')
+      const existing = data.ruleVersions?.find(v => v.effectiveChapterId === command.chapterId)
+      data.ruleVersions = data.ruleVersions?.filter(v => v.id !== existing?.id)
+      data.ruleVersions = [...(data.ruleVersions ?? []), { id: existing?.id ?? randomUUID(), effectiveChapterId: command.chapterId,
         chapterIndex, derivedRules: { ...command.derivedRules }, flatPrecision: command.flatPrecision,
         percentPrecision: command.percentPrecision, combatRules: { ...command.combatRules } }]
       break

@@ -22,7 +22,32 @@ const appStore = useAppStore()
 const message = useMessage()
 const dialog = useDialog()
 const generatingStage = ref<'concepts' | 'blueprint' | null>(null)
-const generating = computed(() => generatingStage.value !== null)
+const savingProject = ref(false)
+const pendingProjectId = ref('')
+const activeTaskId = ref('')
+const stoppedTaskIds = new Set<string>()
+const generating = computed(() => generatingStage.value !== null || savingProject.value)
+const blueprintInputSignature = ref('')
+const inputsChanged = computed(() => Boolean(conceptResult.value && conceptInputSignature.value !== currentConceptInputSignature())
+  || Boolean(result.value && blueprintInputSignature.value && blueprintInputSignature.value !== currentBlueprintInputSignature()))
+function currentBlueprintInputSignature() { return JSON.stringify([currentConceptInputSignature(), form.volumeMode, form.manualVolumePlan, selectedConceptId.value]) }
+async function stopGeneration() {
+  const id = activeTaskId.value
+  if (!id) return
+  const response = await window.characterArc.cancelAiTask(id)
+  if (!response.success) { message.warning(response.error || '停止请求未成功，请重试'); return }
+  stoppedTaskIds.add(id)
+  message.info('正在停止，已有成果会保留。')
+}
+async function generate(payload: unknown) {
+  const id = crypto.randomUUID()
+  activeTaskId.value = id
+  try {
+    const response = await window.characterArc.generateAi(toIpcPayload({ ...(payload as object), clientTaskId: id }))
+    if (stoppedTaskIds.has(id)) throw new Error('生成已停止，已有成果已保留。')
+    return response
+  } finally { if (activeTaskId.value === id) activeTaskId.value = ''; stoppedTaskIds.delete(id) }
+}
 const conceptResult = ref<StoryConceptOptionsResult | null>(null)
 const selectedConceptId = ref('')
 const conceptInputSignature = ref('')
@@ -90,7 +115,7 @@ let restoringDraft = false
 let completedDraft = false
 let draftTimer: ReturnType<typeof setTimeout> | undefined
 function draftSnapshot() {
-  return { form: { ...form }, referencePlan: toIpcPayload(referencePlan), conceptResult: conceptResult.value,
+  return { pendingProjectId: pendingProjectId.value, blueprintInputSignature: blueprintInputSignature.value, form: { ...form }, referencePlan: toIpcPayload(referencePlan), conceptResult: conceptResult.value,
     selectedConceptId: selectedConceptId.value, conceptInputSignature: conceptInputSignature.value,
     result: result.value, editingBlueprint: editingBlueprint.value, blueprintBeforeEdit: blueprintBeforeEdit.value,
     revisionMessages: revisionMessages.value, revisionInput: revisionInput.value, revisionProposal: revisionProposal.value,
@@ -109,6 +134,8 @@ function clearCompletedDraft() {
 }
 async function resetCreationDraft() {
   restoringDraft = true
+  pendingProjectId.value = ''
+  blueprintInputSignature.value = ''
   form.title = ''
   form.genre = props.asset?.topKeywords.find((keyword) =>
     genreOptions.some((option) => option.value === keyword)
@@ -148,6 +175,8 @@ watch(() => [props.show, props.asset?.id] as const, async ([show]) => {
   if (stored) {
     restoringDraft = true
     const data = stored.data
+    pendingProjectId.value = data.pendingProjectId ?? ''
+    blueprintInputSignature.value = data.blueprintInputSignature ?? ''
     Object.assign(form, data.form)
     Object.assign(referencePlan, data.referencePlan)
     conceptResult.value = data.conceptResult
@@ -203,30 +232,10 @@ function close(): void {
 function currentConceptInputSignature(): string {
   return JSON.stringify({
     references: selectedReferences.value.map(({ asset, purpose }) => [asset.id, purpose]),
-    title: form.title.trim(),
     genre: form.genre,
     premise: form.premise.trim()
   })
 }
-
-watch(() => currentConceptInputSignature(), () => {
-  if (restoringDraft || !conceptResult.value || currentConceptInputSignature() === conceptInputSignature.value) return
-  conceptResult.value = null
-  selectedConceptId.value = ''
-  conceptInputSignature.value = ''
-  result.value = null
-  editingBlueprint.value = false
-  blueprintBeforeEdit.value = null
-  revisionProposal.value = null
-})
-
-watch(() => [form.volumeMode, form.manualVolumePlan] as const, () => {
-  if (restoringDraft) return
-  result.value = null
-  editingBlueprint.value = false
-  blueprintBeforeEdit.value = null
-  revisionProposal.value = null
-})
 
 function startEditingBlueprint(): void {
   if (!result.value || generating.value || revisionProposal.value) return
@@ -318,7 +327,7 @@ async function sendRevisionRequest(): Promise<void> {
   revisionInput.value = ''
   revisionBusy.value = true
   try {
-    const response = await window.characterArc.generateAi(toIpcPayload({
+    const response = await generate({
       task: 'reference-blueprint-revise',
       settings: appStore.appSettings,
       context: {
@@ -328,7 +337,7 @@ async function sendRevisionRequest(): Promise<void> {
         blueprint: source,
         messages: revisionMessages.value.slice(-8)
       }
-    }))
+    })
     if (!response.success || !response.result) throw new Error(response.error ?? 'AI 修改骨架失败')
     if (result.value !== baseline || currentConceptInputSignature() !== inputSignature) return
     const proposal = response.result as BlueprintRevisionResult
@@ -446,7 +455,7 @@ async function generateConceptOptions(): Promise<void> {
   const inputSignature = currentConceptInputSignature()
   generatingStage.value = 'concepts'
   try {
-    const response = await window.characterArc.generateAi(toIpcPayload({
+    const response = await generate({
       task: 'story-concept-options',
       settings: appStore.appSettings,
       context: {
@@ -455,7 +464,7 @@ async function generateConceptOptions(): Promise<void> {
         projectGenre: form.genre,
         projectPremise: form.premise.trim()
       }
-    }))
+    })
     if (!response.success || !response.result) {
       throw new Error(response.error ?? '创意思路生成失败')
     }
@@ -475,7 +484,6 @@ async function generateConceptOptions(): Promise<void> {
 function selectConcept(id: string): void {
   if (generating.value || editingBlueprint.value) return
   selectedConceptId.value = id
-  result.value = null
 }
 
 async function generateBlueprint(): Promise<void> {
@@ -486,7 +494,7 @@ async function generateBlueprint(): Promise<void> {
     return
   }
   if (currentConceptInputSignature() !== conceptInputSignature.value) {
-    message.warning('项目名称、题材或原创方向已变化，请重新生成创意思路。')
+    message.warning('题材、参考用途或原创方向已变化。请重新生成路线，或保留原骨架直接创建。')
     return
   }
   if (form.volumeMode === 'manual' && !form.manualVolumePlan.trim()) {
@@ -503,7 +511,7 @@ async function generateBlueprint(): Promise<void> {
   const volumeSignature = JSON.stringify([form.volumeMode, form.manualVolumePlan])
   generatingStage.value = 'blueprint'
   try {
-    const response = await window.characterArc.generateAi(toIpcPayload({
+    const response = await generate({
       task: 'reference-project-blueprint',
       settings: appStore.appSettings,
       context: {
@@ -518,7 +526,7 @@ async function generateBlueprint(): Promise<void> {
         lockedFacts: conceptResult.value?.lockedFacts ?? [],
         selectedConcept: selectedConcept.value
       }
-    }))
+    })
     if (!response.success || !response.result) {
       throw new Error(response.error ?? '原创骨架生成失败')
     }
@@ -526,6 +534,7 @@ async function generateBlueprint(): Promise<void> {
       || JSON.stringify([form.volumeMode, form.manualVolumePlan]) !== volumeSignature
       || !selectedConcept.value) return
     result.value = response.result as ReferenceProjectBlueprintResult
+    blueprintInputSignature.value = currentBlueprintInputSignature()
     editingBlueprint.value = false
     blueprintBeforeEdit.value = null
     revisionMessages.value = []
@@ -538,7 +547,41 @@ async function generateBlueprint(): Promise<void> {
   }
 }
 
-function createProject(): void {
+async function saveProject(seed: Parameters<typeof appStore.createProjectWorkspace>[0]): Promise<boolean> {
+  if (savingProject.value) return false
+  savingProject.value = true
+  try {
+    seed.project.referenceUsage = selectedReferences.value.map(({ asset, purpose },index) => ({ referenceWorkId: asset.id, purpose, role: index === 0 ? 'main' : 'auxiliary', boundary: '仅参考指定维度，人物、专有名词与具体情节均原创。' }))
+    if (!pendingProjectId.value || !appStore.projects.some(project => project.id === pendingProjectId.value)) {
+      pendingProjectId.value = appStore.createProjectWorkspace(seed, undefined, false)
+    }
+    saveCreationDraft()
+    await appStore.persistWorkspace()
+    if (appStore.persistenceError) throw new Error(appStore.persistenceError)
+    clearCompletedDraft()
+    appStore.openProject(pendingProjectId.value)
+    return true
+  } catch (error) {
+    message.error(`项目保存未完成，创建草稿已保留。请重试保存：${error instanceof Error ? error.message : String(error)}`)
+    return false
+  } finally { savingProject.value = false }
+}
+async function retryProjectSave() {
+  if (!pendingProjectId.value || savingProject.value) return
+  savingProject.value = true
+  try {
+    if (!appStore.projects.some(project => project.id === pendingProjectId.value)) {
+      pendingProjectId.value = ''; saveCreationDraft(); message.info('项目尚未落盘，请重新确认创建。'); return
+    }
+    await appStore.persistWorkspace()
+    if (appStore.persistenceError) throw new Error(appStore.persistenceError)
+    clearCompletedDraft(); appStore.openProject(pendingProjectId.value); emit('update:show', false)
+    message.success('项目已保存。')
+  } catch (error) { message.error(String(error)) } finally { savingProject.value = false }
+}
+
+async function createProject(): Promise<void> {
+  if (!form.title.trim()) { message.warning('请填写小说名称。'); return }
   const asset = props.asset
   if (!asset || !result.value || editingBlueprint.value || revisionBusy.value || revisionProposal.value) return
   const blueprintError = validateBlueprint(result.value)
@@ -563,13 +606,12 @@ function createProject(): void {
     shouldGenerate: true
   }, result.value, selectedReferences.value.map(({ asset: selected }) => selected.id),
   referencePlan.bindStyle ? referencePlan.styleReferenceId : '')
-  appStore.createProjectWorkspace(seed)
-  clearCompletedDraft()
+  if (!await saveProject(seed)) return
   emit('update:show', false)
   message.success(`已创建《${form.title.trim()}》，结构参考已保存。`)
 }
 
-function createDirectProject(): void {
+async function createDirectProject(): Promise<void> {
   if (!props.asset || generating.value || revisionBusy.value) return
   if (!form.title.trim()) {
     message.warning('请先填写新小说名称。')
@@ -592,11 +634,10 @@ function createDirectProject(): void {
     shouldGenerate: false
   }, worldviews, selectedReferences.value.map(({ asset }) => asset.id),
   referencePlan.bindStyle ? referencePlan.styleReferenceId : '')
-  appStore.createProjectWorkspace(seed)
-  clearCompletedDraft()
+  if (!await saveProject(seed)) return
   emit('update:show', false)
   message.success(`已创建《${form.title.trim()}》，复制 ${worldviews.length} 条世界观设定；剧情骨架留空。`)
 }
 
-return { generatingStage, generating, conceptResult, selectedConceptId, result, editingBlueprint, revisionMessages, revisionInput, revisionBusy, revisionProposal, creationMode, directNovelLength, reuseCurrentWorldview, sourceProject, sourceWorldviewEntries, purposeOptions, referencePlan, auxiliaryAssetOptions, styleReferenceOptions, form, genreOptions, draftSavedAt, restoredDraft, startFreshDraft, selectedConcept, groupedOutline, close, startEditingBlueprint, cancelEditingBlueprint, saveEditingBlueprint, addOutlineItem, removeOutlineItem, addChapterPlan, removeChapterPlan, sendRevisionRequest, adoptRevision, discardRevision, revisionEditLabel, revisionExistingTitle, generateConceptOptions, selectConcept, generateBlueprint, createProject, createDirectProject }
+return { inputsChanged, pendingProjectId, savingProject, retryProjectSave, activeTaskId, stopGeneration, generatingStage, generating, conceptResult, selectedConceptId, result, editingBlueprint, revisionMessages, revisionInput, revisionBusy, revisionProposal, creationMode, directNovelLength, reuseCurrentWorldview, sourceProject, sourceWorldviewEntries, purposeOptions, referencePlan, auxiliaryAssetOptions, styleReferenceOptions, form, genreOptions, draftSavedAt, restoredDraft, startFreshDraft, selectedConcept, groupedOutline, close, startEditingBlueprint, cancelEditingBlueprint, saveEditingBlueprint, addOutlineItem, removeOutlineItem, addChapterPlan, removeChapterPlan, sendRevisionRequest, adoptRevision, discardRevision, revisionEditLabel, revisionExistingTitle, generateConceptOptions, selectConcept, generateBlueprint, createProject, createDirectProject }
 }

@@ -1,3 +1,4 @@
+import type { ReferenceUsage } from '@shared/reference-usage'
 import type {
   ChapterAssistantPromptTemplate,
   ChapterDraft,
@@ -116,6 +117,7 @@ export interface ProjectWorkspaceSeed {
     writingStylePrompt: string
     chapterAssistantTemplates: ChapterAssistantPromptTemplate[]
     selectedReferenceWorkIds?: string[]
+    referenceUsage?: ReferenceUsage[]
     styleFingerprintBinding?: ProjectStyleFingerprintBinding
   }
   worldviewEntries: WorldviewEntry[]
