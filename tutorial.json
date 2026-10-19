@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-10-16",
+  "updatedAt": "2026-10-19",
   "title": "墨脉使用教程",
   "intro": "从创建作品、配置 AI，到维护设定、生成大纲和进行章节创作，按这份教程即可快速熟悉墨脉。",
   "resources": [
@@ -9,7 +9,7 @@
       "type": "github",
       "title": "墨脉使用教程图文版",
       "description": "新版实机截图与操作步骤：配置 AI、创建作品、多本拆书参考、移动大纲、章节创作、游戏数值与备份。",
-      "url": "https://github.com/15810785091/mo-mai/blob/main/docs/user-guide.md",
+      "url": "https://github.com/XiaoMaYi0530/mo-mai/blob/main/docs/user-guide.md",
       "enabled": true
     },
     {

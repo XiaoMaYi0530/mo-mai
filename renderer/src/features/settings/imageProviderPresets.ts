@@ -22,11 +22,11 @@ export const imageProviderPresets: ImageProviderPreset[] = [
     hint: 'OpenAI 官方图片生成接口，支持 gpt-image-1。需要 OpenAI API Key。'
   },
   {
-    label: 'GPT-Image-1 (云雾 AI)',
+    label: 'GPT-Image-1 (云雾 AI · 第三方)',
     value: 'gpt-image-yunwu',
     model: 'gpt-image-1',
     baseUrl: 'https://yunwu.ai/v1',
-    hint: '云雾 AI 中转，兼容 OpenAI 格式。适合国内用户使用 GPT-Image 系列模型。'
+    hint: '第三方 OpenAI 兼容服务，非 OpenAI 官方接口。选择后，封面提示词将发送到所填服务地址；需使用该服务的 API Key。'
   },
   {
     label: 'FLUX.1 (SiliconFlow)',

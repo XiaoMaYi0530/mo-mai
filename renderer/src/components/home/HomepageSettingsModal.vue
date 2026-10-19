@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, Copy, Cpu, Download, GripVertical, Image, MonitorCo
 import { NButton, NFormItem, NInput, NInputNumber, NModal, NSelect, NSwitch, useMessage } from 'naive-ui'
 import { autoSaveOptions } from '@/features/settings/autoSave'
 import { getProviderPreset, providerOptions, resolveProviderDefaults } from '@/features/settings/providerPresets'
-import { imageProviderOptions, resolveImageProviderDefaults } from '@/features/settings/imageProviderPresets'
+import { getImageProviderPreset, imageProviderOptions, resolveImageProviderDefaults } from '@/features/settings/imageProviderPresets'
 import {
   DEFAULT_WORKBENCH_MENU_ORDER,
   moveWorkbenchMenuItem,
@@ -841,6 +841,7 @@ async function saveSettings(): Promise<void> {
                   @update:value="(value) => handleImageProviderChange(value ?? '')"
                 />
                 <span class="preset-hint">{{ isCodexImageMode ? '复用本机 Codex CLI 登录，无需图片模型、地址和 API Key。' : '切换预设仅更新模型名和 Base URL，API Key 不会被覆盖。' }}</span>
+                <span v-if="!isCodexImageMode" class="preset-hint">{{ getImageProviderPreset(draftSettings.imageProvider).hint }}</span>
               </div>
             </n-form-item>
             <n-form-item v-if="!isCodexImageMode" label="图片模型名称">

@@ -1,3 +1,4 @@
+import { openExternalWebUrl } from './external-url.ts'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
@@ -1690,9 +1691,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
   })
 
   ipcMain.handle('characterarc:open-external-url', (_event, url: string) => {
-    if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
-      shell.openExternal(url)
-    }
+    return openExternalWebUrl(url, target => shell.openExternal(target))
   })
 
   // ── 番茄风向标：抓取榜单数据（主进程缓存，避免每次请求） ──

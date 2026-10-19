@@ -1,3 +1,4 @@
+import { openExternalWebUrl } from './external-url.ts'
 import { app, BrowserWindow, nativeTheme, screen, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -115,7 +116,7 @@ export function createWindowManager() {
     })
 
     window.webContents.setWindowOpenHandler(({ url }) => {
-      void shell.openExternal(url)
+      void openExternalWebUrl(url, target => shell.openExternal(target))
       return { action: 'deny' }
     })
 

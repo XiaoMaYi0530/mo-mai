@@ -6,6 +6,10 @@
 
 ### AI 小说创作桌面应用
 
+当前维护：[XiaoMaYi0530](https://github.com/XiaoMaYi0530) · [项目仓库](https://github.com/XiaoMaYi0530/mo-mai) · [问题反馈](https://github.com/XiaoMaYi0530/mo-mai/issues)
+
+保留原作者署名与 MIT 许可证；旧数据目录、应用 ID 和归档标识继续兼容。
+
 <p>
   面向需要长期维护项目设定、角色关系、剧情结构与章节正文的创作者
 </p>
@@ -16,7 +20,7 @@
 
 <p>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" />
-  <img alt="Version" src="https://img.shields.io/badge/version-v1.22.44-f59e0b?style=flat-square" />
+  <img alt="Version" src="https://img.shields.io/github/package-json/v/XiaoMaYi0530/mo-mai?style=flat-square&color=f59e0b" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0ea5e9?style=flat-square" />
   <img alt="Electron" src="https://img.shields.io/badge/Electron-37-47848f?style=flat-square&logo=electron&logoColor=white" />
   <img alt="Vue" src="https://img.shields.io/badge/Vue-3.5-42b883?style=flat-square&logo=vue.js&logoColor=white" />

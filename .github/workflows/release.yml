@@ -275,8 +275,10 @@ jobs:
 
       - name: Purge jsDelivr CDN cache
         if: success()
+        env:
+          RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
-          curl -sS "https://purge.jsdelivr.net/gh/15810785091/mo-mai@main/announcements.json"
+          curl -sS "https://purge.jsdelivr.net/gh/${RELEASE_REPOSITORY}@main/announcements.json"
           echo ""
-          curl -sS "https://purge.jsdelivr.net/gh/15810785091/mo-mai@main/CHANGELOG.md"
+          curl -sS "https://purge.jsdelivr.net/gh/${RELEASE_REPOSITORY}@main/CHANGELOG.md"
           echo ""

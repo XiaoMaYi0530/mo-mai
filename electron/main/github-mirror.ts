@@ -1,3 +1,4 @@
+import { githubCacheKey } from './github-cache-key.ts'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -125,7 +126,7 @@ async function fetchJsonFromMirrors(
 // ── 公开 API ──
 
 export type FetchWithCacheOptions = {
-  /** GitHub 仓库，如 `'15810785091/mo-mai'` */
+  /** GitHub 仓库，如 `'XiaoMaYi0530/mo-mai'` */
   repo: string
   /** 分支名，如 `'main'` */
   branch: string
@@ -170,7 +171,8 @@ export async function fetchWithCache(opts: FetchWithCacheOptions): Promise<Fetch
   const path = String(filePath ?? '').replace(/^\/+/, '').trim()
   if (!path) return { success: false, error: '缺少文件路径' }
 
-  const cached = await readCache(cacheDir, path)
+  const cacheKey = githubCacheKey(repo, branch, path)
+  const cached = await readCache(cacheDir, cacheKey)
 
   // 非强制刷新且缓存新鲜 → 直接复用
   if (!force && cached && Date.now() - cached.fetchedAt < ttlMs) {
@@ -186,7 +188,7 @@ export async function fetchWithCache(opts: FetchWithCacheOptions): Promise<Fetch
   try {
     const { data, mirror } = await fetchJsonFromMirrors(repo, branch, path, timeoutMs, preferActiveMirror)
     const fetchedAt = Date.now()
-    await writeCache(cacheDir, path, { fetchedAt, mirror, data })
+    await writeCache(cacheDir, cacheKey, { fetchedAt, mirror, data })
     return { success: true, data, fromCache: false, fetchedAt, mirror }
   } catch (error) {
     // 网络失败：能回退到旧缓存就回退（哪怕已过期）

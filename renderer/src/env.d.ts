@@ -691,7 +691,7 @@ declare global {
         }
         error?: string
       }>
-      openExternalUrl: (url: string) => Promise<void>
+      openExternalUrl: (url: string) => Promise<{ success: boolean; error?: string }>
       fetchAnnouncements: () => Promise<{
         success: boolean
         data?: Array<{ title: string; date: string; type: string; items: string[] }>
