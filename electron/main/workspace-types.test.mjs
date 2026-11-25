@@ -252,3 +252,9 @@ test('全局 AI 日志会合并旧项目级记录并按 ID 去重', () => {
   assert.equal(normalized.aiRuns[0].responsePreview, '全局记录')
   assert.deepEqual(normalized.workspaces['project-1'].aiRuns, [])
 })
+
+test('旧版工作区缺少主题时仍可导入作品列表', () => {
+  const workspace = normalizeWorkspacePayload({ projects: [{ id: 'book', title: '未完稿' }] })
+  assert.equal(workspace.theme, 'ocean')
+  assert.equal(workspace.projects[0].title, '未完稿')
+})

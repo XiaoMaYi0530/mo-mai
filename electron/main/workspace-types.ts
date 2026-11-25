@@ -821,7 +821,7 @@ export function normalizeWorkspacePayload(payload: WorkspacePayload | LegacyWork
   )
 
   return {
-    theme: legacyPayload.theme,
+    theme: legacyPayload.theme || 'ocean',
     selectedProjectId,
     knowledgeDocuments: [],
     referenceWorks: [],
