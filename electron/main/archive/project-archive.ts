@@ -1,6 +1,6 @@
 import JSZip from 'jszip'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { GameProjectData } from '../../shared/game-progression'
@@ -12,7 +12,6 @@ import { getWorkspaceDirPath } from '../workspace-store'
 import { countProjectStoryState, readProjectStoryState, replaceProjectStoryState, type ProjectStoryStateArchive } from './project-story-state-archive'
 import { validateStoryStateModuleSelection } from './project-archive-selection'
 import { collectProjectSkillsForArchive, restoreProjectSkillsFromArchive, validateArchivedProjectSkills, type ArchivedProjectSkill } from './project-skill-archive'
-import { stagedChangesStore } from '../ai/runtime-v2/staged-changes-store'
 import {
   normalizeWorkspacePayload,
   type WorkspaceKnowledgeDocument,
@@ -473,7 +472,6 @@ function writeAssistantV2Archive(
     )
   }
 
-  stagedChangesStore.reloadFromDatabase()
 }
 
 function buildManifest(
@@ -927,14 +925,18 @@ function remapArchiveContent(
     : []
   const assets = new Map<string, Buffer>()
   if (modules.has('referenceNovelAssets')) {
+    const books = new Set(content.referenceWorks.map(work => work.id))
     for (const [oldId, data] of content.referenceNovelAssets) {
-      assets.set(mapId(idMap, oldId), data)
+      const id = idMap.get(oldId)
+      if (!books.has(oldId) || !id || !/^[\w-]+$/.test(id)) throw new Error('归档参考原文缺少有效的拆书记录。')
+      assets.set(id, data)
     }
   }
   const assistantV2 = remapAssistantV2Archive(content.assistantV2, targetProjectId, idMap, modules)
   const gameProgression = modules.has('gameProgression') && content.gameProgression
     ? {
         ...content.gameProgression,
+        protagonistCharacterId: mapId(idMap, content.gameProgression.protagonistCharacterId),
         ruleVersions: content.gameProgression.ruleVersions?.map(version => ({ ...version, effectiveChapterId: mapId(idMap, version.effectiveChapterId) })),
         characters: content.gameProgression.characters.map((character) => ({ ...character, characterId: mapId(idMap, character.characterId) })),
         events: content.gameProgression.events.map((event) => ({
@@ -1026,22 +1028,7 @@ function mergeById<T extends { id: string }>(current: T[], incoming: T[], replac
   return [...preserved, ...incoming]
 }
 
-async function restoreReferenceNovelAssets(assets: Map<string, Buffer>): Promise<void> {
-  if (assets.size === 0) return
-  const targetDir = join(getWorkspaceDirPath(), 'reference-novels')
-  await mkdir(targetDir, { recursive: true })
-  for (const [id, data] of assets) {
-    await writeFile(join(targetDir, `${id}.txt`), data)
-  }
-}
-
 export async function importProjectArchive(options: ImportProjectArchiveOptions): Promise<{ selectedProjectId: string }> {
-  options.onProgress?.({ phase: 'preparing', message: '正在读取当前工作区...', percent: 6 })
-  const snapshot = options.readWorkspaceSnapshot(options.db)
-  if (!snapshot) {
-    throw new Error('当前工作区尚未初始化，无法导入项目归档。')
-  }
-
   const modules = expandModules(options.modules)
   options.onProgress?.({ phase: 'reading', message: '正在读取备份文件...', percent: 18 })
   const sourceContent = await readArchiveContent(options.filePath)
@@ -1050,131 +1037,173 @@ export async function importProjectArchive(options: ImportProjectArchiveOptions)
   if (modules.has('gameProgression') && sourceContent.gameProgression && (!modules.has('characters') || !modules.has('chapters'))) {
     throw new Error('导入游戏数值需同时导入角色与章节，以保持事件引用一致。')
   }
-  const targetProjectId =
-    options.mode === 'new-project'
-      ? idWithPrefix('project')
-      : (options.targetProjectId || snapshot.selectedProjectId || snapshot.projects[0]?.id || '').trim()
-  if (!targetProjectId) {
-    throw new Error('没有可覆盖的目标项目。')
-  }
-
-  options.onProgress?.({ phase: 'mapping', message: '正在整理备份中的项目数据...', percent: 36 })
-  const { content: incoming, idMap } = remapArchiveContent(sourceContent, targetProjectId, modules)
-  const nextPayload: WorkspacePayload = {
-    ...snapshot,
-    // 项目归档不覆盖本机 AI Key、主题和公告相关设置，只更新项目内容。
-    selectedProjectId: targetProjectId
-  }
-
-  options.onProgress?.({ phase: 'merging', message: '正在合并所选模块...', percent: 54 })
-  if (options.mode === 'new-project') {
-    nextPayload.projects = [...snapshot.projects, incoming.project]
-    nextPayload.workspaces = {
-      ...snapshot.workspaces,
-      [targetProjectId]: incoming.workspace
-    }
-  } else {
-    const currentProject = snapshot.projects.find((project) => project.id === targetProjectId)
-    if (!currentProject) {
-      throw new Error('目标项目不存在，无法导入归档。')
+  const workspaceDir = getWorkspaceDirPath()
+  const staging = await mkdtemp(join(workspaceDir, '.archive-import-'))
+  const installed: Array<{ target: string; old?: string; placed: boolean }> = []
+  let transaction = false
+  let keepStaging = false
+  try {
+    options.db.exec('BEGIN IMMEDIATE')
+    transaction = true
+    const snapshot = options.readWorkspaceSnapshot(options.db)
+    if (!snapshot) throw new Error('当前工作区尚未初始化，无法导入项目归档。')
+    const targetProjectId =
+      options.mode === 'new-project'
+        ? idWithPrefix('project')
+        : (options.targetProjectId || snapshot.selectedProjectId || snapshot.projects[0]?.id || '').trim()
+    if (!targetProjectId) {
+      throw new Error('没有可覆盖的目标项目。')
     }
 
-    nextPayload.projects = snapshot.projects.map((project) => {
-      if (project.id !== targetProjectId) return project
-      if (!modules.has('project') && !modules.has('referenceWorks')) return project
-      return {
-        ...project,
-        ...(modules.has('project')
-          ? {
-              title: incoming.project.title,
-              genre: incoming.project.genre,
-              premise: incoming.project.premise,
-              novelLength: incoming.project.novelLength,
-              cover: incoming.project.cover,
-              targetPlatform: incoming.project.targetPlatform,
-              writingStylePresetId: incoming.project.writingStylePresetId,
-              writingStylePrompt: incoming.project.writingStylePrompt,
-              novelWorkflowStages: incoming.project.novelWorkflowStages,
-              projectSkills: incoming.project.projectSkills,
-              skillPolicy: incoming.project.skillPolicy,
-              skillPresetBindings: incoming.project.skillPresetBindings,
-              chapterAssistantTemplates: incoming.project.chapterAssistantTemplates,
-              coverHistory: incoming.project.coverHistory,
-              styleFingerprintBinding: incoming.project.styleFingerprintBinding
-            }
-          : {}),
-        ...(modules.has('referenceWorks') ? {
-          selectedReferenceWorkIds: incoming.project.selectedReferenceWorkIds,
-          referenceUsage: incoming.project.referenceUsage,
-          styleFingerprintBinding: incoming.project.styleFingerprintBinding
-        } : {}),
-        lastEdited: new Date().toISOString()
+    options.onProgress?.({ phase: 'mapping', message: '正在整理备份中的项目数据...', percent: 36 })
+    const { content: incoming, idMap } = remapArchiveContent(sourceContent, targetProjectId, modules)
+    const nextPayload: WorkspacePayload = {
+      ...snapshot,
+      // 项目归档不覆盖本机 AI Key、主题和公告相关设置，只更新项目内容。
+      selectedProjectId: targetProjectId
+    }
+
+    options.onProgress?.({ phase: 'merging', message: '正在合并所选模块...', percent: 54 })
+    if (options.mode === 'new-project') {
+      nextPayload.projects = [...snapshot.projects, incoming.project]
+      nextPayload.workspaces = {
+        ...snapshot.workspaces,
+        [targetProjectId]: incoming.workspace
       }
-    })
-    nextPayload.workspaces = {
-      ...snapshot.workspaces,
-      [targetProjectId]: mergeWorkspace(
-        snapshot.workspaces[targetProjectId] ?? createEmptyWorkspace(),
-        incoming.workspace,
-        modules,
-        true
+    } else {
+      const currentProject = snapshot.projects.find((project) => project.id === targetProjectId)
+      if (!currentProject) {
+        throw new Error('目标项目不存在，无法导入归档。')
+      }
+
+      nextPayload.projects = snapshot.projects.map((project) => {
+        if (project.id !== targetProjectId) return project
+        if (!modules.has('project') && !modules.has('referenceWorks')) return project
+        return {
+          ...project,
+          ...(modules.has('project')
+            ? {
+                title: incoming.project.title,
+                genre: incoming.project.genre,
+                premise: incoming.project.premise,
+                novelLength: incoming.project.novelLength,
+                cover: incoming.project.cover,
+                targetPlatform: incoming.project.targetPlatform,
+                writingStylePresetId: incoming.project.writingStylePresetId,
+                writingStylePrompt: incoming.project.writingStylePrompt,
+                novelWorkflowStages: incoming.project.novelWorkflowStages,
+                projectSkills: incoming.project.projectSkills,
+                skillPolicy: incoming.project.skillPolicy,
+                skillPresetBindings: incoming.project.skillPresetBindings,
+                chapterAssistantTemplates: incoming.project.chapterAssistantTemplates,
+                coverHistory: incoming.project.coverHistory,
+                styleFingerprintBinding: incoming.project.styleFingerprintBinding
+              }
+            : {}),
+          ...(modules.has('referenceWorks') ? {
+            selectedReferenceWorkIds: incoming.project.selectedReferenceWorkIds,
+            referenceUsage: incoming.project.referenceUsage,
+            styleFingerprintBinding: incoming.project.styleFingerprintBinding
+          } : {}),
+          lastEdited: new Date().toISOString()
+        }
+      })
+      nextPayload.workspaces = {
+        ...snapshot.workspaces,
+        [targetProjectId]: mergeWorkspace(
+          snapshot.workspaces[targetProjectId] ?? createEmptyWorkspace(),
+          incoming.workspace,
+          modules,
+          true
+        )
+      }
+    }
+
+    if (modules.has('referenceWorks')) {
+      // 参考作品是全局拆书库资源，覆盖项目时只更新当前项目的选择列表，不删除旧全局条目，避免影响其他项目复用。
+      nextPayload.referenceWorks = mergeById(snapshot.referenceWorks, incoming.referenceWorks, new Set<string>())
+    }
+
+    if (modules.has('knowledgeDocuments')) {
+      const replaceKnowledgeIds =
+        options.mode === 'overwrite-project'
+          ? new Set(readProjectKnowledgeDocuments(options.db, targetProjectId).map((document) => document.id))
+          : new Set<string>()
+      nextPayload.knowledgeDocuments = mergeById(
+        snapshot.knowledgeDocuments as Array<WorkspaceKnowledgeDocument & { projectId?: string }>,
+        incoming.knowledgeDocuments,
+        replaceKnowledgeIds
       )
     }
-  }
 
-  if (modules.has('referenceWorks')) {
-    // 参考作品是全局拆书库资源，覆盖项目时只更新当前项目的选择列表，不删除旧全局条目，避免影响其他项目复用。
-    nextPayload.referenceWorks = mergeById(snapshot.referenceWorks, incoming.referenceWorks, new Set<string>())
+    const normalized = normalizeWorkspacePayload(nextPayload)
+    options.onProgress?.({ phase: 'writing', message: '正在写入本地数据库...', percent: 72 })
+    options.writeWorkspaceSnapshot(options.db, normalized)
+    if (modules.has('chapters')) {
+      // 旧版归档没有故事状态；章节被覆盖时仍须清除目标项目的旧状态。
+      replaceProjectStoryState(
+        options.db,
+        targetProjectId,
+        modules.has('storyState') ? incoming.storyState ?? {} : {},
+        idMap
+      )
+    }
+    if (modules.has('gameProgression') && incoming.gameProgression) {
+      const validGame = validateImportedGameProject(options.db, targetProjectId, incoming.gameProgression)
+      options.db.prepare(`INSERT INTO game_progression (project_id, revision, data_json) VALUES (?, 1, ?)
+        ON CONFLICT(project_id) DO UPDATE SET revision = game_progression.revision + 1, data_json = excluded.data_json`)
+        .run(targetProjectId, JSON.stringify(validGame))
+      commitGameEventsForFinalChapters(options.db)
+    }
+    if (modules.has('assistantSessions')) {
+      options.onProgress?.({ phase: 'assistant', message: '正在恢复助手会话...', percent: 84 })
+      writeAssistantV2Archive(
+        options.db,
+        targetProjectId,
+        incoming.assistantV2,
+        options.mode === 'overwrite-project'
+      )
+    }
+    options.onProgress?.({ phase: 'assets', message: '正在恢复自定义 Skill 与参考原文资产...', percent: 92 })
+    const assets: Array<{ staged: string; target: string }> = []
+    if (modules.has('project') && incoming.customSkills.length) {
+      await restoreProjectSkillsFromArchive(staging, targetProjectId, incoming.customSkills)
+      const skills = join('project-skills', targetProjectId)
+      for (const name of await readdir(join(staging, skills))) {
+        assets.push({ staged: join(staging, skills, name), target: join(dirname(workspaceDir), skills, name) })
+      }
+    }
+    for (const [id, bytes] of incoming.referenceNovelAssets) {
+      const filename = id + '.txt'
+      const staged = join(staging, filename)
+      await writeFile(staged, bytes)
+      assets.push({ staged, target: join(workspaceDir, 'reference-novels', filename) })
+    }
+    for (const { staged, target } of assets) {
+      await mkdir(dirname(target), { recursive: true })
+      const old = existsSync(target) ? join(staging, randomUUID()) : undefined
+      if (old) await rename(target, old)
+      const entry = { target, old, placed: false }
+      installed.push(entry)
+      await rename(staged, target)
+      entry.placed = true
+    }
+    options.db.exec('COMMIT')
+    transaction = false
+    return { selectedProjectId: targetProjectId }
+  } catch (error) {
+    if (transaction) options.db.exec('ROLLBACK')
+    for (const entry of installed.reverse()) {
+      try {
+        if (entry.placed) await rm(entry.target, { recursive: true, force: true })
+        if (entry.old) await rename(entry.old, entry.target)
+      } catch { keepStaging = true }
+    }
+    if (keepStaging) throw new Error('归档导入失败，部分附件需从此目录恢复：' + staging, { cause: error })
+    throw error
+  } finally {
+    if (!keepStaging) await rm(staging, { recursive: true, force: true }).catch(error => console.warn('[archive] staging cleanup:', error))
   }
-
-  if (modules.has('knowledgeDocuments')) {
-    const replaceKnowledgeIds =
-      options.mode === 'overwrite-project'
-        ? new Set(readProjectKnowledgeDocuments(options.db, targetProjectId).map((document) => document.id))
-        : new Set<string>()
-    nextPayload.knowledgeDocuments = mergeById(
-      snapshot.knowledgeDocuments as Array<WorkspaceKnowledgeDocument & { projectId?: string }>,
-      incoming.knowledgeDocuments,
-      replaceKnowledgeIds
-    )
-  }
-
-  const normalized = normalizeWorkspacePayload(nextPayload)
-  options.onProgress?.({ phase: 'writing', message: '正在写入本地数据库...', percent: 72 })
-  options.writeWorkspaceSnapshot(options.db, normalized)
-  if (modules.has('chapters')) {
-    // 旧版归档没有故事状态；章节被覆盖时仍须清除目标项目的旧状态。
-    replaceProjectStoryState(
-      options.db,
-      targetProjectId,
-      modules.has('storyState') ? incoming.storyState ?? {} : {},
-      idMap
-    )
-  }
-  if (modules.has('gameProgression') && incoming.gameProgression) {
-    const validGame = validateImportedGameProject(options.db, targetProjectId, incoming.gameProgression)
-    options.db.prepare(`INSERT INTO game_progression (project_id, revision, data_json) VALUES (?, 1, ?)
-      ON CONFLICT(project_id) DO UPDATE SET revision = game_progression.revision + 1, data_json = excluded.data_json`)
-      .run(targetProjectId, JSON.stringify(validGame))
-    commitGameEventsForFinalChapters(options.db)
-  }
-  if (modules.has('assistantSessions')) {
-    options.onProgress?.({ phase: 'assistant', message: '正在恢复助手会话...', percent: 84 })
-    writeAssistantV2Archive(
-      options.db,
-      targetProjectId,
-      incoming.assistantV2,
-      options.mode === 'overwrite-project'
-    )
-  }
-  options.onProgress?.({ phase: 'assets', message: '正在恢复自定义 Skill 与参考原文资产...', percent: 92 })
-  if (modules.has('project') && incoming.customSkills.length > 0) {
-    await restoreProjectSkillsFromArchive(
-      dirname(getWorkspaceDirPath()), targetProjectId, incoming.customSkills
-    )
-  }
-  await restoreReferenceNovelAssets(incoming.referenceNovelAssets)
-  return { selectedProjectId: targetProjectId }
 }
 
 export async function importProjectArchiveInWorker(

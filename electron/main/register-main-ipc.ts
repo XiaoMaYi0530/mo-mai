@@ -1,6 +1,6 @@
 import { openExternalWebUrl } from './external-url.ts'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,6 +9,7 @@ import * as XLSX from 'xlsx'
 
 import type { AiTaskPayload, ReferenceStyleAnalysisResult, ReferenceStyleChunkResult } from './ai/shared-types'
 import { runAiTask } from './ai/runtime'
+import { stagedChangesStore } from './ai/runtime-v2/staged-changes-store'
 import { indexReferenceNovel } from './ai/knowledge-retrieval'
 import { refreshRegistry as refreshSkillRegistry, toScanEntries as skillScanEntries, toContextEntries as skillContextEntries } from './ai/skills'
 import { getProjectSkillsDirPath as getSkillsDirPath } from './ai/skills/discovery'
@@ -137,7 +138,7 @@ type RegisterMainIpcHandlersDeps = {
     settings: unknown,
     metadata: { theme: string; selectedProjectId: string }
   ) => void
-  normalizeWorkspacePayload: (payload: unknown) => unknown
+  normalizeWorkspacePayload: (payload: unknown) => WorkspacePayload
   ensureWorkspaceDb: () => Promise<DatabaseSync>
   getWorkspaceDbIfInitialized: () => DatabaseSync | null
   readWorkspaceSnapshot: (db: DatabaseSync) => unknown
@@ -176,28 +177,19 @@ type ProjectArchiveImportRequest = {
   modules?: ProjectArchiveModule[]
 }
 
-async function cleanupOrphanReferenceNovelFiles(payload: unknown): Promise<void> {
-  const activeIds = new Set<string>()
-  const works = (payload as { referenceWorks?: Array<{ id?: unknown }> })?.referenceWorks ?? []
-  for (const work of works) {
-    const id = String(work?.id ?? '').trim()
-    if (id) activeIds.add(id)
-  }
-
-  const novelStorageDir = join(getWorkspaceDirPath(), 'reference-novels')
-  if (!existsSync(novelStorageDir)) return
-
-  const files = await readdir(novelStorageDir)
-  for (const file of files) {
-    if (!file.endsWith('.txt')) continue
-    const id = file.slice(0, -4)
-    if (!activeIds.has(id)) {
-      await unlink(join(novelStorageDir, file)).catch(() => {})
+export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void {
+  const loadedWindows = new WeakSet<Electron.WebContents>()
+  function saveWorkspace(db: DatabaseSync, normalized: WorkspacePayload) {
+    const previous = db.prepare('SELECT id FROM reference_works').all()
+    deps.writeWorkspaceSnapshot(db, normalized)
+    const remaining = new Set(normalized.referenceWorks.map(work => work.id))
+    for (const { id } of previous) {
+      if (typeof id !== 'string' || remaining.has(id) || !/^[\w-]+$/.test(id)) continue
+      const path = join(getWorkspaceDirPath(), 'reference-novels', id + '.txt')
+      try { rmSync(path, { force: true }) }
+      catch (error) { console.warn('[reference] removed book file cleanup failed:', error) }
     }
   }
-}
-
-export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void {
   registerGameProgressionIpc({ ensureWorkspaceDb: deps.ensureWorkspaceDb, getActiveWindow: () => deps.windowManager.getActiveWindow() })
   ipcMain.handle('characterarc:export-json', async (_event, payload: unknown) => {
     const window = deps.windowManager.getActiveWindow()
@@ -307,6 +299,8 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       return { success: false, canceled: false, error: '缺少要导入的项目归档文件。' }
     }
 
+    if (deps.workspaceRevision.isMutationInProgress) return { success: false, error: '工作区正在写入，请稍后重试导入。' }
+    deps.workspaceRevision.beginMutation()
     try {
       sendProgress({ phase: 'preparing', message: '正在准备导入任务...', percent: 2 })
       await deps.ensureWorkspaceDb()
@@ -317,6 +311,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
         modules: request.modules,
         onProgress: sendProgress
       })
+      if (!request.modules || request.modules.includes('assistantSessions')) stagedChangesStore.reloadFromDatabase()
       sendProgress({ phase: 'syncing', message: '正在刷新工作区数据...', percent: 96 })
       const db = await deps.ensureWorkspaceDb()
       const workspace = deps.readWorkspaceSnapshot(db)
@@ -338,6 +333,8 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
         canceled: false,
         error: error instanceof Error ? error.message : '导入项目归档失败'
       }
+    } finally {
+      deps.workspaceRevision.endMutation()
     }
   })
 
@@ -1318,7 +1315,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
   })
 
   ipcMain.handle('characterarc:workspace-sync-publish', (event, payload: unknown) => {
-    if (!deps.workspaceRevision.accepts(payload)) {
+    if (!loadedWindows.has(event.sender) || !deps.workspaceRevision.accepts(payload)) {
       return { success: false, error: '工作区已更新，旧窗口的同步已拒绝；请先刷新工作区。' }
     }
     const current = deps.workspaceRevision.stamp(deps.normalizeWorkspacePayload(payload) as object)
@@ -1327,17 +1324,19 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
     return { success: true }
   })
 
-  ipcMain.handle('characterarc:load-workspace', async () => {
+  ipcMain.handle('characterarc:load-workspace', async (event) => {
+    loadedWindows.delete(event.sender)
     try {
       const db = await deps.ensureWorkspaceDb()
       const workspace = deps.readWorkspaceSnapshot(db)
 
       if (!workspace) {
-        return { success: false, payload: null }
+        return { success: false, payload: null, error: '工作区记录不完整，请重新读取或恢复备份。' }
       }
 
       const current = deps.workspaceRevision.stamp(workspace as object)
       deps.setLatestWorkspaceSnapshot(current)
+      loadedWindows.add(event.sender)
       nativeTheme.themeSource = (workspace as { appSettings?: { darkMode?: boolean } }).appSettings?.darkMode ? 'dark' : 'light'
 
       return {
@@ -1440,12 +1439,13 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
 
   ipcMain.handle('characterarc:save-workspace', async (_event, payload: unknown) => {
     try {
+      if (!loadedWindows.has(_event.sender)) throw new Error('工作区尚未成功读取，已阻止写入。')
       const db = await deps.ensureWorkspaceDb()
       if (!deps.workspaceRevision.accepts(payload)) {
         return { success: false, error: '工作区已被其他窗口或 AI 写回更新，本次旧快照未保存，以免覆盖新内容。请刷新工作区后重试。' }
       }
       const normalized = deps.normalizeWorkspacePayload(payload)
-      deps.writeWorkspaceSnapshot(db, normalized)
+      saveWorkspace(db, normalized)
       void createWorkspaceBackup(db, getWorkspaceDirPath()).catch((error) => {
         console.warn('[workspace-backup] automatic backup failed:', error)
       })
@@ -1453,10 +1453,6 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
       deps.setLatestWorkspaceSnapshot(current)
       deps.windowManager.broadcastWindowEvent('characterarc:workspace-sync-event', current, _event.sender.id)
       nativeTheme.themeSource = (normalized as { appSettings?: { darkMode?: boolean } }).appSettings?.darkMode ? 'dark' : 'light'
-
-      cleanupOrphanReferenceNovelFiles(normalized).catch((error) => {
-        console.warn('[workspace] reference-novels cleanup failed:', error)
-      })
 
       return { success: true, revision: deps.workspaceRevision.currentRevision }
     } catch (error) {
@@ -1470,6 +1466,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
 
   ipcMain.on('characterarc:save-workspace-sync', (event, payload: unknown) => {
     try {
+      if (!loadedWindows.has(event.sender)) throw new Error('工作区尚未成功读取，已阻止写入。')
       const db = deps.getWorkspaceDbIfInitialized()
       if (!db) {
         throw new Error('工作区数据库尚未初始化')
@@ -1479,7 +1476,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
         return
       }
       const normalized = deps.normalizeWorkspacePayload(payload)
-      deps.writeWorkspaceSnapshot(db, normalized)
+      saveWorkspace(db, normalized)
       void createWorkspaceBackup(db, getWorkspaceDirPath()).catch((error) => {
         console.warn('[workspace-backup] automatic backup failed:', error)
       })
@@ -1498,6 +1495,7 @@ export function registerMainIpcHandlers(deps: RegisterMainIpcHandlersDeps): void
 
   ipcMain.handle('characterarc:save-app-settings', async (_event, payload: unknown) => {
     try {
+      if (!loadedWindows.has(_event.sender)) throw new Error('工作区尚未成功读取，已阻止写入。')
       const db = await deps.ensureWorkspaceDb()
       const record = (payload ?? {}) as {
         theme?: unknown

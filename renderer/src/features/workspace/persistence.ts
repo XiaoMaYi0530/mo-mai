@@ -10,6 +10,7 @@ const WORKSPACE_SYNC_DELAY_MS = 120
 
 export interface WorkspacePersistenceDeps {
   hasHydrated: Ref<boolean>
+  getWorkspaceRevision: () => number
   serializeWorkspaceState: () => StoredState
   getSettingsSnapshot: () => {
     theme: ThemeName
@@ -41,7 +42,8 @@ export function createWorkspacePersistence(deps: WorkspacePersistenceDeps) {
       window.clearTimeout(workspaceSyncTimer)
     }
     workspaceSyncTimer = window.setTimeout(() => {
-      void window.characterArc.publishWorkspaceSync(toIpcPayload(deps.serializeWorkspaceState()))
+      workspaceSyncTimer = null
+      void window.characterArc.publishWorkspaceSync(deps.serializeWorkspaceState())
     }, WORKSPACE_SYNC_DELAY_MS)
   }
 
@@ -58,7 +60,7 @@ export function createWorkspacePersistence(deps: WorkspacePersistenceDeps) {
       workspaceSyncTimer = null
     }
     const submitted = deps.serializeWorkspaceState()
-    const result = window.characterArc.saveWorkspaceSync(toIpcPayload(submitted))
+    const result = window.characterArc.saveWorkspaceSync(submitted)
     persistenceError.value = result.success ? null : result.error ?? '保存失败'
     if (result.success) {
       if (typeof result.revision === 'number') deps.setWorkspaceRevision(result.revision)
@@ -68,6 +70,7 @@ export function createWorkspacePersistence(deps: WorkspacePersistenceDeps) {
   }
 
   function persistWorkspace(): Promise<void> {
+    if (!deps.hasHydrated.value) return Promise.resolve()
     if (saveTimer) {
       window.clearTimeout(saveTimer)
       saveTimer = null
@@ -85,9 +88,13 @@ export function createWorkspacePersistence(deps: WorkspacePersistenceDeps) {
         while (persistRequested) {
           persistRequested = false
           let result: { success: boolean; error?: string; revision?: number }
+          if (workspaceSyncTimer) {
+            window.clearTimeout(workspaceSyncTimer)
+            workspaceSyncTimer = null
+          }
           const submitted = deps.serializeWorkspaceState()
           try {
-            result = await window.characterArc.saveWorkspace(toIpcPayload(submitted))
+            result = await window.characterArc.saveWorkspace(submitted)
           } catch (error) {
             const message = error instanceof Error ? error.message : '保存失败'
             console.error('[workspace] saveWorkspace failed:', error)
@@ -98,7 +105,7 @@ export function createWorkspacePersistence(deps: WorkspacePersistenceDeps) {
           if (!result.success) {
             console.error('[workspace] saveWorkspace failed:', result.error)
           }
-          const currentRevision = deps.serializeWorkspaceState().workspaceRevision ?? 0
+          const currentRevision = deps.getWorkspaceRevision()
           const newerRemoteArrived = currentRevision > (submitted.workspaceRevision ?? 0)
           if (!result.success && newerRemoteArrived) {
             persistRequested = true
@@ -127,6 +134,7 @@ export function createWorkspacePersistence(deps: WorkspacePersistenceDeps) {
   }
 
   async function persistAppSettings(): Promise<void> {
+    if (!deps.hasHydrated.value) return
     if (settingsSaveTimer) {
       window.clearTimeout(settingsSaveTimer)
       settingsSaveTimer = null
@@ -147,7 +155,12 @@ export function createWorkspacePersistence(deps: WorkspacePersistenceDeps) {
     if (!deps.hasHydrated.value) {
       return
     }
-    if (options.syncWorkspace !== false) {
+    // A fast save broadcasts its committed snapshot. Long autosave intervals still
+    // publish an early preview so other windows can see edits before the disk write.
+    if (mode === 'fast' && workspaceSyncTimer) {
+      window.clearTimeout(workspaceSyncTimer)
+      workspaceSyncTimer = null
+    } else if (mode === 'autosave' && options.syncWorkspace !== false) {
       scheduleWorkspaceSync()
     }
     const delay =
@@ -155,7 +168,7 @@ export function createWorkspacePersistence(deps: WorkspacePersistenceDeps) {
         ? FAST_PERSIST_DELAY_MS
         : resolveAutoSaveDelayMs(deps.getSettingsSnapshot().appSettings.autoSaveInterval)
     const nextPersistAt = Date.now() + delay
-    if (mode === 'autosave' && saveTimer && scheduledPersistAt.value !== null) {
+    if (saveTimer && scheduledPersistAt.value !== null && scheduledPersistAt.value <= nextPersistAt) {
       return
     }
     scheduledPersistAt.value = nextPersistAt
@@ -171,7 +184,6 @@ export function createWorkspacePersistence(deps: WorkspacePersistenceDeps) {
   function scheduleSettingsPersist(options: { flushWorkspace?: boolean } = {}): void {
     if (!deps.hasHydrated.value) return
     if (options.flushWorkspace !== false) {
-      scheduleWorkspaceSync()
       // Saving most settings should also flush any queued workspace edits before the app closes.
       schedulePersist('fast')
     }
@@ -184,6 +196,7 @@ export function createWorkspacePersistence(deps: WorkspacePersistenceDeps) {
   }
 
   function handleRemoteWorkspaceSync(payload: unknown): void {
+    if (!deps.hasHydrated.value) return
     if (!payload || typeof payload !== 'object') {
       return
     }

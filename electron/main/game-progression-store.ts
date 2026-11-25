@@ -386,12 +386,17 @@ function assertReferencedAssets(data: GameProjectData, assetId: string): void {
 }
 
 function validateEventTimeline(data: GameProjectData): void {
+  const characters = new Set(data.characters.map(character => character.characterId))
+  const checked = new Set<string>()
   for (const event of data.events) {
     if (event.orphaned) continue
-    if (!data.characters.some((character) => character.characterId === event.characterId)) {
+    if (!characters.has(event.characterId)) {
       throw new Error('章节事件引用了不存在的人物档案。')
     }
+    const point = JSON.stringify([event.characterId, event.chapterIndex, event.chapterId])
+    if (checked.has(point)) continue
     gameSnapshot(data, event.characterId, event.chapterIndex, event.chapterId)
+    checked.add(point)
   }
 }
 
@@ -422,6 +427,8 @@ export function validateImportedGameProject(db: DatabaseSync, projectId: string,
       .get(projectId, character.characterId)) throw new Error('归档中的人物档案重复或未关联当前项目。')
     characterIds.add(character.characterId)
   }
+  const orderedChapters = db.prepare('SELECT id FROM chapters WHERE project_id = ? ORDER BY sort_order ASC, rowid ASC').all(projectId)
+  const chapterIndexes = new Map(orderedChapters.map((row, index) => [String(row.id), index]))
   const eventIds = new Set<string>()
   for (const event of data.events) {
     assertId(event.id, '事件 ID')
@@ -442,10 +449,9 @@ export function validateImportedGameProject(db: DatabaseSync, projectId: string,
       || !['level-up', 'allocate', 'acquire', 'equip', 'unequip', 'activate-title', 'deactivate-title', 'activate-special', 'deactivate-special', 'learn-skill', 'forget-skill', 'use-skill', 'take-damage', 'restore-resource', 'rest', 'consume']
         .includes(event.operation.kind)) throw new Error('归档中的数值操作类型无效。')
     eventIds.add(event.id)
-    const chapter = db.prepare('SELECT id FROM chapters WHERE project_id = ? AND id = ?')
-      .get(projectId, event.chapterId)
-    event.orphaned = !chapter
-    if (chapter) event.chapterIndex = chapterIndexForGame(db, projectId, event.chapterId)
+    const index = chapterIndexes.get(event.chapterId)
+    event.orphaned = index === undefined
+    if (index !== undefined) event.chapterIndex = index
   }
   if (data.flatPrecision !== undefined) assertPrecision(data.flatPrecision)
   if (data.percentPrecision !== undefined) assertPrecision(data.percentPrecision)
@@ -460,8 +466,8 @@ export function validateImportedGameProject(db: DatabaseSync, projectId: string,
     assertPrecision(version.flatPrecision); assertPrecision(version.percentPrecision)
     assertId(version.effectiveChapterId, '规则生效章节')
     if (!Number.isSafeInteger(version.chapterIndex) || version.chapterIndex < 0) throw new Error('规则生效位置无效。')
-    const anchor = db.prepare('SELECT id FROM chapters WHERE project_id = ? AND id = ?').get(projectId, version.effectiveChapterId)
-    if (anchor) version.chapterIndex = chapterIndexForGame(db, projectId, version.effectiveChapterId)
+    const index = chapterIndexes.get(version.effectiveChapterId)
+    if (index !== undefined) version.chapterIndex = index
   }
   validateEventTimeline(data)
   return data

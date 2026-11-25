@@ -102,3 +102,33 @@ test('simultaneous edits to the same chapter keep the author text and archive th
     globalThis.window = originalWindow
   }
 })
+
+test('工作区读取失败时拦截所有保存，成功载入后每次保存只生成一份千章快照', async () => {
+  const previousWindow = globalThis.window
+  const submitted = []
+  globalThis.window = { characterArc: { saveWorkspace: async payload => {
+    submitted.push(payload)
+    return { success: true, revision: 2 }
+  } } }
+  try {
+    let snapshots = 0
+    const hydrated = { value: false }
+    const chapters = Array.from({ length: 1000 }, (_, i) => ({ id: String(i), content: '正文'.repeat(500) }))
+    const persistence = loadPersistence()({
+      hasHydrated: hydrated,
+      getWorkspaceRevision: () => 1,
+      serializeWorkspaceState: () => { snapshots++; return { workspaceRevision: 1, workspaces: { p: { chapters: structuredClone(chapters) } } } },
+      setWorkspaceRevision: () => {}
+    })
+    await persistence.persistWorkspace()
+    await persistence.persistAppSettings()
+    persistence.flushWorkspaceSync()
+    persistence.schedulePersist()
+    persistence.handleRemoteWorkspaceSync({})
+    assert.equal(snapshots, 0)
+    hydrated.value = true
+    await persistence.persistWorkspace()
+    assert.equal(snapshots, 1)
+    assert.equal(submitted[0].workspaces.p.chapters.length, 1000)
+  } finally { globalThis.window = previousWindow }
+})

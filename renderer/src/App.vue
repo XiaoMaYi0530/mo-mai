@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { Moon, Sun } from 'lucide-vue-next'
 import { createDiscreteApi, NConfigProvider, NDialogProvider, NGlobalStyle, NMessageProvider, NSpin, darkTheme } from 'naive-ui'
 import { useAppStore } from '@/stores/app'
@@ -146,12 +146,37 @@ function toggleDarkMode(): void {
   })
 }
 
+const recoveryBackups = ref<Array<{ name: string; createdAt: string }>>([])
+const recoveryName = ref('')
+async function listRecoveryBackups() {
+  try {
+    const response = await window.characterArc.listWorkspaceBackups()
+    if (!response.success) throw new Error(response.error)
+    recoveryBackups.value = response.backups ?? []
+    recoveryName.value = recoveryBackups.value[0]?.name ?? ''
+    if (!recoveryName.value) message.info('没有可用的本地备份')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  }
+}
+async function recoverWorkspace() {
+  if (!recoveryName.value || !window.confirm('使用所选备份恢复整个工作区并重启？新版备份恢复后需重新填写 AI 和图片 API Key。')) return
+  try {
+    const result = await window.characterArc.restoreWorkspaceBackup(recoveryName.value)
+    if (!result.success) throw new Error(result.error)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  }
+}
+
 async function retryWorkspaceSave() {
   try {
     await appStore.persistWorkspace()
     if (appStore.persistenceError) message.error(appStore.persistenceError)
     else message.success('工作区已保存')
-  } catch (error) { message.error(String(error)) }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  }
 }
 
 // Ctrl+S 全局保存快捷键
@@ -221,11 +246,22 @@ onBeforeUnmount(() => {
             <div v-if="appStore.persistenceError" class="app-error-banner">
               <strong>本地数据读写异常</strong>
               <span>{{ appStore.persistenceError }}</span>
-              <button :disabled="appStore.isPersisting" @click="retryWorkspaceSave">重试保存工作区</button>
+              <button v-if="appStore.hasHydrated" :disabled="appStore.isPersisting" @click="retryWorkspaceSave">重试保存工作区</button>
             </div>
             <div v-if="!appStore.hasHydrated" class="app-loading">
-              <n-spin size="large" />
-              <p>正在载入本地工作区...</p>
+              <template v-if="appStore.persistenceError">
+                <button @click="appStore.initialize()">重新读取工作区</button>
+                <button @click="listRecoveryBackups">查看本地备份</button>
+                <template v-if="recoveryBackups.length">
+                  <select v-model="recoveryName" aria-label="选择恢复备份">
+                    <option v-for="item in recoveryBackups" :key="item.name" :value="item.name">
+                      {{ new Date(item.createdAt).toLocaleString() }}
+                    </option>
+                  </select>
+                  <button @click="recoverWorkspace">恢复并重启</button>
+                </template>
+              </template>
+              <template v-else><n-spin size="large" /><p>正在载入本地工作区...</p></template>
             </div>
             <Transition v-else name="view-fade" mode="out-in">
               <ProjectCenter v-if="appStore.currentView === 'projects'" key="projects" />

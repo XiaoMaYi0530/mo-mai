@@ -21,7 +21,7 @@ import type {
 const appStore = useAppStore()
 const message = useMessage()
 const dialog = useDialog()
-const backups = ref<Array<{ name: string; createdAt: string; sizeBytes: number; projectTitles: string[]; assetMode: 'complete' | 'database-only' }>>([])
+const backups = ref<Array<{ name: string; createdAt: string; sizeBytes: number; projectCount: number; projectTitles: string[]; assetMode: 'complete' | 'database-only' }>>([])
 const selectedBackupName = ref('')
 const showBackupPreview = ref(false)
 const isManagingBackups = ref(false)
@@ -59,7 +59,7 @@ function confirmRestoreBackup(): void {
   if (!selected) return
   dialog.warning({
     title: '恢复整个工作区？',
-    content: `将恢复到 ${new Date(selected.createdAt).toLocaleString('zh-CN')} 的全部作品和设置，并重启应用。${selected.assetMode === 'database-only' ? '这是旧版仅数据库备份，封面、参考原文与导入 Skill 不会恢复。' : '封面、参考原文与导入 Skill 也会同步恢复。'}当前状态会先另存为恢复前备份。`,
+    content: `将恢复到 ${new Date(selected.createdAt).toLocaleString('zh-CN')} 的全部作品和设置，并重启应用。${selected.assetMode === 'database-only' ? '这是旧版仅数据库备份，封面、参考原文与导入 Skill 不会恢复。' : '封面、参考原文与导入 Skill 也会同步恢复。'}当前状态会先另存为恢复前备份。新版备份恢复后需重新填写 AI 和图片 API Key。`,
     positiveText: '恢复并重启',
     negativeText: '取消',
     onPositiveClick: async () => {
@@ -366,7 +366,7 @@ watch(
           <n-select
             v-model:value="selectedBackupName"
             class="compact-select"
-            :options="backups.map((item) => ({ label: `${new Date(item.createdAt).toLocaleString('zh-CN')} · ${item.projectTitles.length} 部作品 · ${item.assetMode === 'complete' ? '完整' : '仅数据库'}`, value: item.name }))"
+            :options="backups.map((item) => ({ label: `${new Date(item.createdAt).toLocaleString('zh-CN')} · ${item.projectCount} 部作品 · ${item.assetMode === 'complete' ? '完整' : '仅数据库'}`, value: item.name }))"
             placeholder="选择备份"
           />
           <n-button :disabled="!selectedBackupName || isManagingBackups" @click="showBackupPreview = true">预览并恢复</n-button>

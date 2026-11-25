@@ -18,10 +18,10 @@ contextBridge.exposeInMainWorld('characterArc', {
   /** 从 SQLite 加载当前项目的完整工作区快照 */
   loadWorkspace: () => ipcRenderer.invoke('characterarc:load-workspace'),
   /** 将完整工作区快照写入 SQLite（全量覆盖写） */
-  saveWorkspace: (payload: unknown) => ipcRenderer.invoke(IPC_CHANNELS.SAVE_WORKSPACE, toIpcPayload(payload)),
+  saveWorkspace: (payload: unknown) => ipcRenderer.invoke(IPC_CHANNELS.SAVE_WORKSPACE, payload),
   /** 窗口关闭前同步写入工作区，避免异步 IPC 被进程退出截断 */
   saveWorkspaceSync: (payload: unknown) =>
-    ipcRenderer.sendSync('characterarc:save-workspace-sync', toIpcPayload(payload)),
+    ipcRenderer.sendSync('characterarc:save-workspace-sync', payload),
   /** 仅更新 app_settings 行，避免全量序列化工作区 */
   saveAppSettings: (payload: SaveAppSettingsRequest) =>
     ipcRenderer.invoke(IPC_CHANNELS.SAVE_APP_SETTINGS, toIpcPayload(payload)),
@@ -193,7 +193,7 @@ contextBridge.exposeInMainWorld('characterArc', {
 
   // ── 工作区同步 ──
   /** 广播工作区数据同步 */
-  publishWorkspaceSync: (payload: unknown) => ipcRenderer.invoke('characterarc:workspace-sync-publish', toIpcPayload(payload)),
+  publishWorkspaceSync: (payload: unknown) => ipcRenderer.invoke('characterarc:workspace-sync-publish', payload),
   previewWorkspaceBackup: (name: string) => ipcRenderer.invoke('characterarc:preview-workspace-backup', name),
   readBackupChapters: (input: unknown) => ipcRenderer.invoke('characterarc:read-backup-chapters', toIpcPayload(input)),
   listWorkspaceBackups: () => ipcRenderer.invoke('characterarc:list-workspace-backups'),

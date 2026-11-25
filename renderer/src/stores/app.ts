@@ -273,6 +273,7 @@ export const useAppStore = defineStore('app', () => {
   } = createWorkspacePersistence({
     hasHydrated,
     serializeWorkspaceState: () => serializeWorkspaceState(),
+    getWorkspaceRevision: () => workspaceRevision.value,
     getSettingsSnapshot: () => ({
       theme: theme.value,
       selectedProjectId: selectedProjectId.value,
@@ -853,18 +854,18 @@ export const useAppStore = defineStore('app', () => {
    * 必须在 Vue 挂载前调用。
    */
   async function initialize(): Promise<void> {
-    const result = await window.characterArc.loadWorkspace()
-    if (result.success && result.payload) {
+    hasHydrated.value = false
+    persistenceError.value = null
+    try {
+      const result = await window.characterArc.loadWorkspace()
+      if (!result.success || !result.payload) throw new Error(result.error || '工作区读取失败')
       applyWorkspaceState(result.payload as Partial<StoredState>)
       markWorkspaceLoaded()
       persistenceError.value = null
-    } else {
-      const err = result.error ?? null
-      console.error('[workspace] loadWorkspace failed:', err)
-      persistenceError.value = err
+      hasHydrated.value = true
+    } catch (error) {
+      persistenceError.value = error instanceof Error ? error.message : String(error)
     }
-
-    hasHydrated.value = true
   }
 
   // ── 项目导入 ──

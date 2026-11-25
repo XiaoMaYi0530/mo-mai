@@ -406,6 +406,13 @@ function handleDeleteProfile(): void {
 function updateEditingProfile(updates: Partial<AiProfile>): void {
   const profile = editingProfile.value
   if (!profile) return
+  const provider = updates.provider ?? profile.provider
+  const baseUrl = (updates.baseUrl ?? profile.baseUrl).trim()
+  if (updates.apiKey === undefined && (provider !== profile.provider || baseUrl !== profile.baseUrl.trim())) {
+    const saved = appStore.appSettings.aiProfiles.find(item => item.id === profile.id)
+    updates.apiKey = saved?.provider === provider && saved.baseUrl.trim() === baseUrl ? saved.apiKey : ''
+    fetchedModels.value = []
+  }
   Object.assign(profile, updates)
   if (isEditingActiveProfile.value) {
     if (updates.provider !== undefined) draftSettings.provider = updates.provider
@@ -433,12 +440,20 @@ function handleProviderChange(provider: string): void {
   fetchedModels.value = []
 }
 
+function changeImageEndpoint(provider: string, baseUrl: string): void {
+  if (provider !== draftSettings.imageProvider || baseUrl.trim() !== draftSettings.imageBaseUrl.trim()) {
+    draftSettings.imageApiKey = provider === appStore.appSettings.imageProvider
+      && baseUrl.trim() === appStore.appSettings.imageBaseUrl.trim() ? appStore.appSettings.imageApiKey : ''
+    fetchedImageModels.value = []
+  }
+  draftSettings.imageProvider = provider
+  draftSettings.imageBaseUrl = baseUrl
+}
+
 function handleImageProviderChange(value: string): void {
-  draftSettings.imageProvider = value
   const defaults = resolveImageProviderDefaults(value)
   draftSettings.imageModel = defaults.model
-  draftSettings.imageBaseUrl = defaults.baseUrl
-  fetchedImageModels.value = []
+  changeImageEndpoint(value, defaults.baseUrl)
 }
 
 async function handleFetchImageModels(): Promise<void> {
@@ -840,7 +855,7 @@ async function saveSettings(): Promise<void> {
                   clearable
                   @update:value="(value) => handleImageProviderChange(value ?? '')"
                 />
-                <span class="preset-hint">{{ isCodexImageMode ? '复用本机 Codex CLI 登录，无需图片模型、地址和 API Key。' : '切换预设仅更新模型名和 Base URL，API Key 不会被覆盖。' }}</span>
+                <span class="preset-hint">{{ isCodexImageMode ? '复用本机 Codex CLI 登录，无需图片模型、地址和 API Key。' : '切换图片服务或接口地址后，请填写该接口的 API Key。' }}</span>
                 <span v-if="!isCodexImageMode" class="preset-hint">{{ getImageProviderPreset(draftSettings.imageProvider).hint }}</span>
               </div>
             </n-form-item>
@@ -880,7 +895,7 @@ async function saveSettings(): Promise<void> {
               <n-input
                 :value="draftSettings.imageBaseUrl"
                 placeholder="例如：https://api.openai.com/v1"
-                @update:value="(value) => { draftSettings.imageBaseUrl = value }"
+                @update:value="(value) => changeImageEndpoint(draftSettings.imageProvider, value)"
               />
             </n-form-item>
             <n-form-item label="图片 API Key">

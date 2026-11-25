@@ -166,3 +166,52 @@ test('恢复新作品保留选中章节的原分卷顺序、名称和卷信息�
   assert.equal(restored.chapters[1].status,'draft')
   assert.equal(selection.chapters[0].id,'c1')
 })
+
+test('备份统计全部作品，保留二十个预览标题，清除数据库副本中的 API Key', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mo-mai-backup-summary-'))
+  const db = new DatabaseSync(join(directory, 'workspace.db'))
+  try {
+    db.exec('CREATE TABLE projects(title TEXT); CREATE TABLE app_settings(id INTEGER, api_key TEXT, image_api_key TEXT, ai_profiles_json TEXT)')
+    for (let i = 1; i <= 25; i++) db.prepare('INSERT INTO projects VALUES (?)').run('小说' + i)
+    const keys = ['test-text-credential', 'test-image-credential', 'test-profile-credential']
+    db.prepare('INSERT INTO app_settings VALUES (1, ?, ?, ?)').run(keys[0], keys[1], JSON.stringify([{ model: 'example', apiKey: keys[2] }]))
+    const saved = await createWorkspaceBackup(db, directory, true)
+    const [listed] = await listWorkspaceBackups(directory)
+    assert.equal(listed.projectCount, 25)
+    assert.equal(listed.projectTitles.length, 20)
+    assert.equal(db.prepare('SELECT api_key FROM app_settings').get().api_key, keys[0])
+    const copy = join(directory, 'backups', saved.name, 'workspace.db')
+    const bytes = await readFile(copy)
+    for (const key of keys) assert.equal(bytes.includes(Buffer.from(key)), false)
+    const restored = new DatabaseSync(copy, { readOnly: true })
+    try {
+      assert.deepEqual(JSON.parse(restored.prepare('SELECT ai_profiles_json FROM app_settings').get().ai_profiles_json), [{ model: 'example', apiKey: '' }])
+    } finally { restored.close() }
+    // The list uses the manifest, but restore must independently verify the database.
+    await writeFile(copy, 'damaged database')
+    assert.equal((await listWorkspaceBackups(directory))[0].projectCount, 25)
+    await assert.rejects(stageWorkspaceRestore(directory, saved.name))
+  } finally {
+    db.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('当前数据库损坏时仍可恢复选中的备份', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mo-mai-damaged-db-'))
+  const dbPath = join(directory, 'workspace.db')
+  try {
+    const db = new DatabaseSync(dbPath)
+    let saved
+    try {
+      db.exec("CREATE TABLE projects(title TEXT); INSERT INTO projects VALUES ('可恢复的作品')")
+      saved = await createWorkspaceBackup(db, directory, true)
+    } finally { db.close() }
+    await writeFile(dbPath, 'damaged database')
+    await stageWorkspaceRestore(directory, saved.name)
+    assert.equal(await applyPendingWorkspaceRestore(directory), true)
+    const restored = new DatabaseSync(dbPath, { readOnly: true })
+    try { assert.equal(restored.prepare('SELECT title FROM projects').get().title, '可恢复的作品') }
+    finally { restored.close() }
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})

@@ -41,11 +41,25 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "$GITHUB_REF_NAME" = "v$(node -p "require('./package.json').version")"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Run regression tests
+        run: |
+          pnpm test
+          pnpm run test:archive-integrity
+          pnpm run test:reliability
+          pnpm run test:workspace-revision
+
       - name: Build renderer and Electron bundles
         run: pnpm run build
+
+      - name: Verify packaged archive worker
+        run: pnpm exec cross-env ELECTRON_RUN_AS_NODE=1 electron --test electron/main/archive/project-archive-worker.test.mjs
 
       - name: Upload build output
         uses: actions/upload-artifact@v4
@@ -239,19 +253,22 @@ jobs:
       - name: Resolve release tag
         id: tag
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          else
-            VERSION=$(node -p "require('./package.json').version")
-            TAG="v${VERSION}"
-            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-            if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-              echo "Tag ${TAG} already exists; reusing it."
-            else
-              git tag "${TAG}"
-              git push origin "${TAG}"
+          TAG="v$(node -p "require('./package.json').version")"
+          REMOTE_TAG=$(git ls-remote --tags --refs origin "refs/tags/${TAG}")
+          if [[ -n "$REMOTE_TAG" ]]; then
+            git fetch --no-tags origin "refs/tags/${TAG}"
+            if [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$(git rev-parse HEAD)" ]]; then
+              echo "::error::Tag ${TAG} belongs to a different commit."
+              exit 1
             fi
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "::error::Release tag was removed during the build."
+            exit 1
+          else
+            git tag "${TAG}"
+            git push origin "refs/tags/${TAG}"
           fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4

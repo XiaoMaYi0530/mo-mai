@@ -44,7 +44,7 @@ export function replaceProjectStoryState(
   archive: ProjectStoryStateArchive,
   idMap: Map<string, string>
 ): void {
-  db.exec('BEGIN')
+  db.exec('SAVEPOINT project_story_state')
   try {
     for (const table of STORY_TABLES) {
       if (!tableExists(db, table)) continue
@@ -70,9 +70,9 @@ export function replaceProjectStoryState(
     if (tableExists(db, 'story_embeddings')) {
       db.prepare('DELETE FROM story_embeddings WHERE project_id = ?').run(projectId)
     }
-    db.exec('COMMIT')
+    db.exec('RELEASE project_story_state')
   } catch (error) {
-    db.exec('ROLLBACK')
+    db.exec('ROLLBACK TO project_story_state; RELEASE project_story_state')
     throw error
   }
 }

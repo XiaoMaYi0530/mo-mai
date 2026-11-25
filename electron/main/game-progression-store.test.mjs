@@ -361,3 +361,21 @@ test('长技能名和人物 ID 的战斗记录能够归档回读',()=>{
   assert.equal(validateImportedGameProject(db,'p',legacy).events[0].narrativeNote.length,240)
   db.close()
 })
+
+test('导入同章长战斗时逐个执行伤害与恢复，并拒绝末尾无效操作', () => {
+  const db = fixture()
+  try {
+    const { data } = readGameProject(db, 'p')
+    data.characters = [emptyGameCharacter('hero', data)]
+    data.events = Array.from({ length: 300 }, (_, index) => ({
+      id: 'hit-' + index, characterId: 'hero', chapterId: 'c1', chapterIndex: 9, order: index,
+      status: 'draft', source: 'manual', operation: index % 2 === 0
+        ? { kind: 'take-damage', amount: 1 } : { kind: 'restore-resource', resourceId: 'health', amount: 1 }
+    }))
+    const result = validateImportedGameProject(db, 'p', data)
+    assert.equal(result.events.length, 300)
+    assert.equal(result.events[299].chapterIndex, 0)
+    data.events[299].operation = { kind: 'level-up', levels: -1 }
+    assert.throws(() => validateImportedGameProject(db, 'p', data), /升级级数/)
+  } finally { db.close() }
+})

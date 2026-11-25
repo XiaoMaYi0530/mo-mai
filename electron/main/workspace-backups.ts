@@ -18,11 +18,13 @@ export type WorkspaceBackupInfo = {
   name: string
   createdAt: string
   sizeBytes: number
+  projectCount: number
   projectTitles: string[]
   assetMode: 'complete' | 'database-only'
 }
 
 let backupInFlight: Promise<WorkspaceBackupInfo | null> | null = null
+const legacyBundleSizes = new Map<string, number>()
 
 function backupDir(workspaceDir: string): string {
   return join(workspaceDir, BACKUP_DIR)
@@ -78,27 +80,79 @@ async function backupNames(workspaceDir: string): Promise<string[]> {
     .map((entry) => entry.name)
 }
 
-async function inspectBackup(workspaceDir: string, name: string): Promise<WorkspaceBackupInfo> {
+type BackupCatalog = Pick<WorkspaceBackupInfo, 'sizeBytes' | 'projectCount' | 'projectTitles'>
+
+function checkDatabase(db: DatabaseSync): void {
+  if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok') throw new Error('备份数据库完整性校验失败')
+}
+
+function projectSummary(db: DatabaseSync) {
+  return {
+    projectCount: Number(db.prepare('SELECT COUNT(*) AS count FROM projects').get()?.count),
+    projectTitles: db.prepare('SELECT title FROM projects ORDER BY rowid LIMIT 20').all().map(row => String(row.title))
+  }
+}
+
+async function finishBackup(bundle: string): Promise<void> {
+  const db = new DatabaseSync(join(bundle, 'workspace.db'))
+  let summary: ReturnType<typeof projectSummary>
+  try {
+    // Scrub the backup copy, including freed SQLite pages. The live settings stay usable.
+    const columns = new Set(db.prepare('PRAGMA table_info(app_settings)').all().map(row => row.name))
+    const updates = ['api_key', 'image_api_key'].filter(key => columns.has(key)).map(key => key + " = ''")
+    db.exec('PRAGMA secure_delete = ON')
+    if (updates.length) db.exec('UPDATE app_settings SET ' + updates.join(', '))
+    if (columns.has('ai_profiles_json')) {
+      const update = db.prepare('UPDATE app_settings SET ai_profiles_json = ? WHERE id = ?')
+      for (const row of db.prepare('SELECT id, ai_profiles_json FROM app_settings').all()) {
+        const profiles = JSON.parse(String(row.ai_profiles_json))
+        if (!Array.isArray(profiles)) throw new Error('AI 配置格式无效，无法生成脱敏备份')
+        update.run(JSON.stringify(profiles.map(profile => ({ ...profile, apiKey: '' }))), row.id)
+      }
+    }
+    if (updates.length || columns.has('ai_profiles_json')) db.exec('VACUUM')
+    checkDatabase(db)
+    summary = projectSummary(db)
+  } finally { db.close() }
+  await writeFile(join(bundle, 'manifest.json'), JSON.stringify({
+    version: 2, createdAt: new Date().toISOString(), ...summary, sizeBytes: await sizeOf(bundle)
+  }))
+}
+
+function hasCatalog(value: Partial<BackupCatalog>): value is BackupCatalog {
+  return Number.isSafeInteger(value.projectCount) && Number(value.projectCount) >= 0
+    && Number.isSafeInteger(value.sizeBytes) && Number(value.sizeBytes) >= 0
+    && Array.isArray(value.projectTitles) && value.projectTitles.length <= 20
+    && value.projectTitles.every(title => typeof title === 'string')
+}
+
+async function inspectBackup(workspaceDir: string, name: string, verify = false): Promise<WorkspaceBackupInfo> {
   const path = join(backupDir(workspaceDir), name)
   const complete = name.endsWith('.backup')
+  const compact = name.slice(10, 25)
+  const createdAt = `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}T${compact.slice(9, 11)}:${compact.slice(11, 13)}:${compact.slice(13, 15)}Z`
+  const base = { name, createdAt, assetMode: complete ? 'complete' as const : 'database-only' as const }
   if (complete) {
-    const manifest = JSON.parse(await readFile(join(path, 'manifest.json'), 'utf8')) as { version?: number }
-    if (manifest.version !== 2) throw new Error('备份格式无效')
+    const manifestText = await readFile(join(path, 'manifest.json'), 'utf8')
+    const manifest = JSON.parse(manifestText)
+    if (manifest?.version !== 2) throw new Error('备份格式无效')
+    if (!verify && hasCatalog(manifest)) {
+      return { ...base, projectCount: manifest.projectCount, projectTitles: manifest.projectTitles, sizeBytes: manifest.sizeBytes + Buffer.byteLength(manifestText) }
+    }
   }
   const db = new DatabaseSync(complete ? join(path, 'workspace.db') : path, { readOnly: true })
   try {
-    const check = db.prepare('PRAGMA quick_check').get() as { quick_check: string }
-    if (check.quick_check !== 'ok') throw new Error('备份数据库完整性校验失败')
-    const rows = db.prepare('SELECT title FROM projects ORDER BY rowid LIMIT 20').all() as Array<{ title: string }>
-    const compact = name.slice(10, 25)
-    const createdAt = `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}T${compact.slice(9, 11)}:${compact.slice(11, 13)}:${compact.slice(13, 15)}Z`
-    return {
-      name, createdAt, sizeBytes: await sizeOf(path), projectTitles: rows.map((row) => row.title),
-      assetMode: complete ? 'complete' : 'database-only'
+    if (verify) checkDatabase(db)
+    let sizeBytes = complete && !verify ? legacyBundleSizes.get(path) : undefined
+    if (sizeBytes === undefined) {
+      sizeBytes = await sizeOf(path)
+      if (complete && !verify) {
+        if (legacyBundleSizes.size >= MAX_BACKUPS) legacyBundleSizes.delete(legacyBundleSizes.keys().next().value!)
+        legacyBundleSizes.set(path, sizeBytes)
+      }
     }
-  } finally {
-    db.close()
-  }
+    return { ...base, ...projectSummary(db), sizeBytes }
+  } finally { db.close() }
 }
 
 export async function listWorkspaceBackups(workspaceDir: string): Promise<WorkspaceBackupInfo[]> {
@@ -132,7 +186,7 @@ export async function createWorkspaceBackup(
     try {
       await backup(db, join(temp, 'workspace.db'))
       await copyAssets(workspaceDir, temp)
-      await writeFile(join(temp, 'manifest.json'), JSON.stringify({ version: 2, createdAt: new Date().toISOString() }))
+      await finishBackup(temp)
       await rename(temp, target)
       const result = await inspectBackup(workspaceDir, name)
       const disposable = (await backupNames(workspaceDir)).filter((item) => item !== protectedName && item !== name)
@@ -153,7 +207,7 @@ export async function createWorkspaceBackup(
 
 export async function stageWorkspaceRestore(workspaceDir: string, name: string): Promise<void> {
   if (!BACKUP_NAME.test(name) || !(await backupNames(workspaceDir)).includes(name)) throw new Error('找不到所选本地备份')
-  await inspectBackup(workspaceDir, name)
+  await inspectBackup(workspaceDir, name, true)
   const marker = join(workspaceDir, RESTORE_MARKER)
   const temp = `${marker}.${randomUUID()}.tmp`
   await writeFile(temp, JSON.stringify({ name }), { flag: 'wx' })
@@ -163,14 +217,22 @@ export async function stageWorkspaceRestore(workspaceDir: string, name: string):
 async function snapshotCurrentFiles(workspaceDir: string): Promise<void> {
   const temp = await mkdtemp(join(backupDir(workspaceDir), '.before-restore-'))
   try {
-    const sourceDb = new DatabaseSync(join(workspaceDir, 'workspace.db'), { readOnly: true })
-    try {
-      await backup(sourceDb, join(temp, 'workspace.db'))
-    } finally {
-      sourceDb.close()
-    }
+    const livePath = join(workspaceDir, 'workspace.db')
     await copyAssets(workspaceDir, temp)
-    await writeFile(join(temp, 'manifest.json'), JSON.stringify({ version: 2, createdAt: new Date().toISOString() }))
+    try {
+      if (!await exists(livePath)) throw new Error('缺少当前工作区数据库')
+      const sourceDb = new DatabaseSync(livePath, { readOnly: true })
+      try { await backup(sourceDb, join(temp, 'workspace.db')) } finally { sourceDb.close() }
+      await finishBackup(temp)
+    } catch (error) {
+      // Recovery must also work when the live database itself cannot be opened.
+      if (!(error instanceof Error) || !/file is not a database|database disk image is malformed|no such table: projects|备份数据库完整性校验失败|缺少当前工作区数据库/.test(error.message)) throw error
+      for (const suffix of ['', '-wal', '-shm', '-journal']) {
+        if (await exists(livePath + suffix)) await copyFile(livePath + suffix, join(temp, 'workspace.db' + suffix))
+      }
+      await rename(temp, join(backupDir(workspaceDir), 'damaged-workspace-' + randomUUID()))
+      return
+    }
     await rename(temp, join(backupDir(workspaceDir), fileName()))
   } catch (error) {
     await rm(temp, { recursive: true, force: true })
@@ -187,7 +249,7 @@ export async function applyPendingWorkspaceRestore(workspaceDir: string): Promis
     throw error
   }
   if (!BACKUP_NAME.test(name)) throw new Error('恢复标记中的备份名无效')
-  const sourceInfo = await inspectBackup(workspaceDir, name)
+  const sourceInfo = await inspectBackup(workspaceDir, name, true)
   await snapshotCurrentFiles(workspaceDir)
 
   const source = join(backupDir(workspaceDir), name)
@@ -208,6 +270,13 @@ export async function applyPendingWorkspaceRestore(workspaceDir: string): Promis
       }
     }
     const liveDb = join(workspaceDir, 'workspace.db')
+    for (const suffix of ['-wal', '-shm', '-journal']) {
+      const live = liveDb + suffix
+      if (!await exists(live)) continue
+      const previous = live + '.pre-restore-' + randomUUID()
+      await rename(live, previous)
+      moved.push({ live, previous, installed: false })
+    }
     const previousDb = `${liveDb}.pre-restore-${randomUUID()}`
     if (await exists(liveDb)) await rename(liveDb, previousDb)
     const dbMove = { live: liveDb, previous: previousDb, installed: false }

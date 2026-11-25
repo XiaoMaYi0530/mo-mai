@@ -2,6 +2,7 @@ import { initChapterTrashSchema, readChapterTrash, writeChapterTrash } from './c
 import { join } from 'node:path'
 import { mkdir, readFile } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
+import { isMainThread } from 'node:worker_threads'
 
 import {
   type KnowledgeDocumentSourceType,
@@ -57,15 +58,17 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
   if (dbInitPromise) return dbInitPromise
 
   dbInitPromise = (async () => {
+    let openingDb: DatabaseSync | undefined
     try {
     await ensureWorkspaceDir()
     try {
-      await applyPendingWorkspaceRestore(getWorkspaceDirPath())
+      if (isMainThread) await applyPendingWorkspaceRestore(getWorkspaceDirPath())
     } catch (error) {
       // A damaged/missing backup must never prevent the current library from opening.
       console.error('[workspace-backup] pending restore failed; keeping current database:', error)
     }
     const db = new DatabaseSync(getWorkspaceDbPath())
+    openingDb = db
     db.exec(`
     PRAGMA foreign_keys = ON;
 
@@ -440,6 +443,7 @@ export async function ensureWorkspaceDb(): Promise<DatabaseSync> {
   workspaceDb = db
   return db
     } catch (err) {
+      openingDb?.close()
       dbInitPromise = null
       throw err
     }
@@ -755,19 +759,18 @@ function ensureProjectColumns(db: DatabaseSync): void {
 }
 
 async function migrateLegacyWorkspaceFile(db: DatabaseSync): Promise<void> {
-  const hasProject = db.prepare('SELECT id FROM projects LIMIT 1').get() as { id: string } | undefined
+  if (db.prepare('SELECT id FROM projects LIMIT 1').get() || db.prepare('SELECT id FROM app_settings LIMIT 1').get()) return
 
-  if (hasProject) {
-    return
-  }
-
+  let raw: string
   try {
-    const legacyRaw = await readFile(getWorkspaceFilePath(), 'utf-8')
-    const legacyPayload = JSON.parse(legacyRaw)
-    writeWorkspaceSnapshot(db, normalizeWorkspacePayload(legacyPayload as LegacyWorkspacePayload))
-  } catch {
-    // Ignore missing or invalid legacy files and let the renderer fall back to defaults.
+    raw = await readFile(getWorkspaceFilePath(), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
   }
+  const legacy = JSON.parse(raw)
+  if (!Array.isArray(legacy?.projects)) throw new Error('旧版工作区的作品列表无法读取，请检查 workspace.json 或恢复备份。')
+  writeWorkspaceSnapshot(db, normalizeWorkspacePayload(legacy as LegacyWorkspacePayload))
 }
 
 export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null {
@@ -1421,7 +1424,7 @@ export function readWorkspaceSnapshot(db: DatabaseSync): WorkspacePayload | null
 }
 
 export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePayload): void {
-  db.exec('BEGIN')
+  db.exec('SAVEPOINT workspace_snapshot')
   try {
     const allIds: Record<string, Set<string>> = {
       projects: new Set(),
@@ -1980,9 +1983,9 @@ export function writeWorkspaceSnapshot(db: DatabaseSync, payload: WorkspacePaylo
     }
 
     commitGameEventsForFinalChapters(db)
-    db.exec('COMMIT')
+    db.exec('RELEASE workspace_snapshot')
   } catch (error) {
-    db.exec('ROLLBACK')
+    db.exec('ROLLBACK TO workspace_snapshot; RELEASE workspace_snapshot')
     throw error
   }
 }
